@@ -59,6 +59,31 @@ JSX语法规则：
    1. 若是小写字母，则将该标签转换成html中同名元素，若HTML中无改标签那么报错。
    2. 若是大写字母，React会将这个标签认为是组件，没有定义的话会报错。
 
+> JS 也可以创建虚拟DOM，为什么要选择JSX呢？
+>
+> 如果使用原生的JS来写组件内容代码如下：
+>
+> ```js
+> 
+>     // 创建虚拟dom
+>     const VDOM = React.createElement('h1', {
+>       id: 'title'
+>     }, React.createElement('span', {}, 'Hello React'));
+>     // 渲染虚拟dom到页面
+>     ReactDOM.render(VDOM, document.getElementById('test'))
+> ```
+>
+> 这是我们创建虚拟节点的代码，一层React.createElement()里边还有一层React.createElement()，那么如果是10个标签节点的话那么对应的将会是又臭又长，完全没办法看，所以我们的JSX就出来了。
+>
+> ```jsx
+> // 创建虚拟dom 
+>     const VDOM = <h1><span>Hello React</span></h1>
+>     // 渲染虚拟dom到页面
+>     ReactDOM.render(VDOM, document.getElementById('test'))
+> ```
+>
+> 如此一来，代码结构变得更加整洁好看。
+
 ### 模块与组件、模块化与组件化的理解
 
 #### 模块
