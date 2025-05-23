@@ -109,7 +109,75 @@ JSX语法规则：
 >
 > 
 
+#### JSX 练习
 
+```html
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>jsx小练习</title>
+</head>
+
+<body>
+  <div id="test">
+
+  </div>
+
+  <!-- 引入react核心库 -->
+  <script type="text/javascript" src="../js/react.development.js"></script>
+  <!-- 引入react的dom操作库 -->
+  <script type="text/javascript" src="../js/react-dom.development.js"></script>
+  <!-- 引入babel -->
+  <script type="text/javascript" src="../js/babel.min.js"></script>
+
+  <script type="text/babel">
+    /*
+      【JS语句（代码）】与【JS表达式】
+        1. JS表达式：一个表达式可以产生一个值，可以放在任何一个需要的地方
+        2. 语句：if()、switch()、for()
+    */
+
+    // 模拟数据
+    const data = ['Angular', 'react', 'Vue']
+
+    // 1. 创建虚拟DOM
+    const VDOM = (
+      <div>
+        <h1>前端JS框架列表</h1>
+        <ul>
+          {
+            data.map((item, index) => {
+              return <li key={index}>{item}</li>
+            })
+          }
+        </ul>
+      </div>
+    )
+    // 2. 渲染虚拟DOM到页面
+    ReactDOM.render(VDOM, document.getElementById(
+      'test'
+    ))
+  </script>
+</body>
+
+</html>
+```
+
+> JS表达式：
+>
+> - 表达式：一个表达式会产生一个值，可以放在任何需要一个需要值的地方。比如：
+>   - a
+>   - a + b
+>   - demo(0)
+>   - arr.map()
+>   - function test() {}
+> - 语句：
+>   - if() {}
+>   - for() {}
+>   - switch() {case: xxx}
 
 
 
@@ -202,7 +270,13 @@ React主要是有两种方式：
 
 > 注意：
 >
-> 1. 在进行渲染的时候，组件的名称是一个标签，并且需要首字母大写，同时需要有闭合。
+> 1. 在进行渲染的时候，组件的名称是一个标签，并且需要首字母大写，同时需要有闭合。function MyComponent{}，使用的时候需要设置</MyComponent>标签，大写。
+> 1. 在创建demo function的时候，在ReactDOM.render()函数中需要将demo设置到这个页面，如果传递的是demo函数，是会报错的。
+>
+> 执行了ReactDOM.render(<MyComponent/>, document.getElementById('test'))之后，发生了什么？
+>
+> 1. React解析组件标签，找到了MyComponent组件。
+> 2. 发现组件是使用函数定义的，随后调用这个函数，将返回的虚拟DOM转成真实DOM，随后呈现在页面上。
 
 #### 类式组件
 

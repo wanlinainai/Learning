@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>类的基本知识回顾</title>
+</head>
+
+<body>
+  <script type="text/javascript">
+    // 创建一个Person类
+    class Person {
+      constructor(name, age) {
+        this.name = name;
+        this.age = age;
+      }
+
+      // 一般方法
+      speak() {
+        // 放在了类的原型对象上
+        console.log(`我叫${this.name}，年龄是：${this.age}`)
+      }
+    }
+
+    // 创建一个student类
+    class Student extends Person {
+      constructor(name, age, score) {
+        super(name, age)
+        this.score = score;
+      }
+
+      speak() {
+        console.log(`我叫${this.name}, 我现在是:${this.age}, 我现在读：${this.score}`);
+
+      }
+    }
+
+    // 创建一个Person的实例对象
+    // const p1 = new Person('tom', 15);
+    // const p2 = new Person('dog', 20);
+    // console.log(p1);
+    // console.log(p2);
+    // p1.speak();
+    // p2.speak();
+
+    const s1 = new Student('张德彪', 23, '大四');
+    console.log(s1);
+    s1.speak();
+
+  </script>
+</body>
+
+</html>
