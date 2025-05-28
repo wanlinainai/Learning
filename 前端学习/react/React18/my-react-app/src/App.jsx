@@ -1,7 +1,10 @@
 // import Student from "./Student"
 // import UserGreeting from "./UserGreeting"
 // import List from "./List/List"
-import Button from "./Button"
+// import Button from "./Button"
+
+// import MyComponent from "./MyComponent"
+import Counter from "./Counter"
 
 function App() {
 
@@ -14,13 +17,10 @@ function App() {
       <Student /> */}
 
       {/* <UserGreeting isLoggedIn={true} username="BroCode"/> */}
-
-      <>
-        {/* <List category="Fruits" items={ fruits } />
+      {/* <List category="Fruits" items={ fruits } />
         <List category="Vegetables" items={ vegetables } /> */}
-        <Button />
-      </>
-
+      {/* <Button /> */}
+      <Counter />
     </>
   )
 }
