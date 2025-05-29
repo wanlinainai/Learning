@@ -5,7 +5,8 @@
 
 // import MyComponent from "./MyComponent"
 // import Counter from "./Counter"
-import ColorPicker from "./ColorPicker"
+// import ColorPicker from "./ColorPicker"
+import IncrementAndDecrement from "./IncrementAndDecrement"
 
 function App() {
 
@@ -22,7 +23,8 @@ function App() {
         <List category="Vegetables" items={ vegetables } /> */}
       {/* <Button /> */}
       {/* <MyComponent /> */}
-      <ColorPicker />
+      {/* <ColorPicker /> */}
+      <IncrementAndDecrement />
     </>
   )
 }
