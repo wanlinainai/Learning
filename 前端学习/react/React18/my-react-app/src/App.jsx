@@ -3,8 +3,9 @@
 // import List from "./List/List"
 // import Button from "./Button"
 
-import MyComponent from "./MyComponent"
+// import MyComponent from "./MyComponent"
 // import Counter from "./Counter"
+import ColorPicker from "./ColorPicker"
 
 function App() {
 
@@ -20,7 +21,8 @@ function App() {
       {/* <List category="Fruits" items={ fruits } />
         <List category="Vegetables" items={ vegetables } /> */}
       {/* <Button /> */}
-      <MyComponent />
+      {/* <MyComponent /> */}
+      <ColorPicker />
     </>
   )
 }
