@@ -6,7 +6,10 @@
 // import MyComponent from "./MyComponent"
 // import Counter from "./Counter"
 // import ColorPicker from "./ColorPicker"
-import IncrementAndDecrement from "./IncrementAndDecrement"
+// import IncrementAndDecrement from "./IncrementAndDecrement"
+// import Car from './Car'
+
+import ListOfCar from './ListOfCar'
 
 function App() {
 
@@ -24,7 +27,9 @@ function App() {
       {/* <Button /> */}
       {/* <MyComponent /> */}
       {/* <ColorPicker /> */}
-      <IncrementAndDecrement />
+      {/* <IncrementAndDecrement /> */}
+      {/* <Car /> */}
+      <ListOfCar/>
     </>
   )
 }
