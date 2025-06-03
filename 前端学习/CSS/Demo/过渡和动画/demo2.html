@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <style>
+    body {
+      color: #666;
+      text-align: center;
+    }
+
+    .box {
+      width: 30px;
+      height: 30px;
+      background: #f40;
+      position: fixed;
+      left: 0;
+      top: 0;
+    }
+  </style>
+
+  <style>
+    .box {
+      border-radius: 50%;
+      transition: 0.5s;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="box" id="ball"></div>
+  <p>屏幕上点击任意位置看看</p>
+  <p>此效果需要用到JS</p>
+
+  <script>
+    var box = document.getElementById('ball');
+    window.onclick = function (e) {
+      console.log(e.clientX, e.clientY);
+      // box.style.left = e.clientX - 15 + 'px';
+      // box.style.top = e.clientY - 15 + 'px';
+
+      // 效率更高，使用transform平移
+      var x = e.clientX - 15;
+      var y = e.clientY - 15;
+      box.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
+    }
+  </script>
+</body>
+
+</html>
