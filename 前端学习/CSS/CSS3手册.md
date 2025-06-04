@@ -64,7 +64,74 @@
 
 ### 网格
 
+**网格布局是多行多列布局的最终解决方案**
 
+#### 生成网格布局
+
+![image-20250605002224495](images/CSS3手册/image-20250605002224495.png)
+
+容器生成网格布局之后，所有的子元素为网格项目
+
+#### 定义行和列
+
+`grid-template-rows`：定义行
+
+`grid-template-columns`：定义列
+
+![image-20250605002758798](images/CSS3手册/image-20250605002758798.png)
+
+#### 改变排列方向
+
+使用属性`grid-auto-flow: column`，可使子元素按列排列
+
+![image-20250605003050782](images/CSS3手册/image-20250605003050782.png)
+
+#### 单元格之间的间隙
+
+```css
+row-gap: 10px;/* 行间距是10px */
+column-gap: 20px; /* 列间距是20px */
+gap: 10px 20px; /* 行间隙是10px， 列间隙是20px */
+```
+
+![image-20250605004006509](images/CSS3手册/image-20250605004006509.png)
+
+#### 单元格内部的对齐
+
+默认情况下，网格项目在单元格内部水平和垂直拉伸，以撑满单元格
+
+可以使用`justify-items`设置水平方向的排列
+
+可以使用`align-items`设置垂直方向排列方式
+
+他们的可取值是相同的
+
+```css
+justify-items: start 左 | end 右 | center 中 | stretch 拉伸
+align-items: start 上 | end 下 | center 中 | stretch 拉伸
+```
+
+![image-20250605004504512](images/CSS3手册/image-20250605004504512.png)
+
+可以使用速写属性`place-items: 垂直对齐方式 水平对齐方式`同时设置这两个值
+
+```css
+place-items: start center /* 垂直靠上 水平居中 */
+```
+
+#### 网格项目定位
+
+默认情况下，网格项目一次排列到单元格中，每个网格占据一个单元格
+
+但是可以对网格设置`grid-area`属性来改变这一行为
+
+使用方式为：
+
+```css
+grid-area: 起始行线编号/起始列线编号/结束行线编号/结束列线编号;
+```
+
+![image-20250605004955157](images/CSS3手册/image-20250605004955157.png)
 
 ## 视觉
 
