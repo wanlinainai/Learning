@@ -299,11 +299,72 @@ animation: 规则名  持续时间  重复次数  时间函数  动画方向  �
 
 ## 其他
 
+### box-sizing
 
+![image-20250605225547440](images/CSS3手册/image-20250605225547440.png)
 
+> 原本的设置宽高是在内容身上设置的，可见区域其实是要大于内容区域的，导致实际的值可能不只有100px，使用box-sizing: border-box;可以设置成边框的宽高是100px。
 
+使用`border-box`控制尺寸更加直观，因此很多网站都会加上如下代码：
 
+```css
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+```
 
+### 图像内容适应
+
+CSS3属性`object-fit`可以控制**多媒体内容和元素**的适应方式。通常适用于`img`或者`video`元素中。
+
+下图中所有的`img`元素均被固定了宽高，溢出img的部分实际上不会显示。
+
+![image-20250605230127962](images/CSS3手册/image-20250605230127962.png)
+
+### 视口单位
+
+视口单位有两个：`vw` 和 `vh`，对应的是`viewport width`和 `viewport height`分别用来设置视口的宽度和高度
+
+`1vw`就是视口的1%，`100vw`就是视口的100%
+
+### 伪元素选择器
+
+通过`::before`和`::after`选择器，可以通过CSS给元素生成两个子元素。
+
+![image-20250605230907588](images/CSS3手册/image-20250605230907588.png)
+
+使用伪元素可以避免在代码中使用过多的空元素
+
+**伪元素必须要有content属性，否则不会生效，如果不需要有内容，设置`content: ''`即可**
+
+### 平滑滚动
+
+> 参考MDN：https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-behavior
+
+使用`scroll-behavior: smooth`，可以让滚动更加丝滑
+
+### 字体图标
+
+CSS3新增了`font-face`指令，该指令可以让我们加载网络字体
+
+```css
+h1 {
+  font-family: 翩翩体-简
+}
+
+@font-face {
+  font-family: 翩翩体-简;
+  src: url(字体的加载路径)
+}
+```
+
+最常见的使用方式就是字体图标
+
+**字体图标的本质上是文字，通过font-size设置大小，color设置颜色**
+
+国内使用最多的就是阿里巴巴的矢量图标库:https://www.iconfont.cn/
 
 
 

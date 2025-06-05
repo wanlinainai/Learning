@@ -1,0 +1,118 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* 滚动条在HTML元素上面 */
+html {
+  scroll-behavior: smooth;
+}
+
+.page {
+  height: 100vh;
+}
+
+.page2 {
+  background: #dda450;
+}
+
+.toc {
+  position: fixed;
+  right: 0;
+  background: #303133;
+  color: #fff;
+  padding: 20px;
+  top: 50%;
+  transform: translate(70px, -50%);
+  border-radius: 10px 0 0 10px;
+  box-shadow: 0 0 5px #fff;
+  transition: 0.2s;
+}
+
+.toc:hover {
+  transform: translate(0, -50%);
+  background-color: #000;
+}
+
+.toc a {
+  display: block;
+}
+
+.page1 img {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 50%;
+  transition: 0.2s ease-in-out;
+}
+
+.page1 img:hover {
+  transform: scale(1.3);
+}
+
+.page1 {
+  background: #579ef8;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.page1 .iconfont {
+  font-size: 4em;
+  color: #d9c671;
+}
+
+.page1 p {
+  color: #fff;
+  margin: 1em;
+  margin-bottom: 3em;
+}
+
+/* 第二页 */
+
+.arrow {
+  height: 2px;
+  width: 300px;
+  background: #000;
+  position: relative;
+}
+
+.arrow::before {
+  content: '';
+  width: 10px;
+  height: 0;
+  border: 10px solid;
+  border-color: transparent transparent transparent black;
+  position: absolute;
+  right: -20px;
+  top: -9px;
+}
+
+.desc {
+  background: #fff;
+  margin-top: 20px;
+  padding: 20px 30px;
+  border-radius: 5px;
+  position: relative;
+}
+
+.desc::before {
+  content: '';
+  border: 10px solid;
+  border-color: transparent transparent #fff transparent;
+  position: absolute;
+  border-left-width: 15px;
+  transform: rotate(134deg);
+  left: 50%;
+  top: -11px;
+}
