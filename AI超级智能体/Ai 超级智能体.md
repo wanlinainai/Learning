@@ -219,9 +219,363 @@ spring:
 
 推荐使用21版本，有虚拟线程这个王炸的功能。
 
+##### pom.xml
 
+基础的依赖：
 
+```xml
+<dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
 
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.36</version>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>5.8.37</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.xiaoymin</groupId>
+            <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
+            <version>4.4.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+```
+
+#### 程序调用AI 大模型
+
+实际开发过程中，有很多种方式可以用来调用AI大模型。以下是4种主流的接入方式，并通过示例代码展示如何在项目中使用交互。
+
+1. SDK接入：使用官方提供的SDK，查看文档即可
+2. HTTP接入：通过REST API 直接发送HTTP 请求调用模型
+3. Spring AI：基于Spring的生态，更加方便的接入大模型
+4. LangChain4J：专注于构建LLM应用的Java框架，提供丰富的AI调用组件
+
+本文选用阿里云百炼平台进行构建。
+
+##### 1、SDK接入
+
+###### 1）按照官方文档安装SDK：https://help.aliyun.com/zh/model-studio/install-sdk/
+
+在选择SDK的时候需要注意Maven版本。
+
+pom.xml文件中添加依赖：
+
+```xml
+     <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>dashscope-sdk-java</artifactId>
+            <version>2.18.2</version>
+        </dependency>
+```
+
+###### 2）先在百炼平台申请一个API Key
+
+###### 3） 项目中新建`demo.invoke`包，集中存放调用AI大模型的实例代码
+
+具体的方式可以参考文档：https://help.aliyun.com/zh/model-studio/use-qwen-by-calling-api#ab9194e9a55dk
+
+![image-20250608222116870](images/Ai 超级智能体/image-20250608222116870.png)
+
+测试中，为了安全，我们将API Key保存在接口类中。
+
+```java
+public interface TestApiKey {
+
+    String API_KEY = "";
+}
+```
+
+使用SDK 调用模型的完整示例代码
+
+```java
+
+public class SdkAiInvoke {
+
+    public static GenerationResult callWithMessage() throws ApiException, NoApiKeyException, InputRequiredException {
+        Generation gen = new Generation();
+        Message systemMsg = Message.builder()
+                .role(Role.SYSTEM.getValue())
+                .content("You are a helpful assistant.")
+                .build();
+        Message userMsg = Message.builder()
+                .role(Role.USER.getValue())
+                .content("你是谁？")
+                .build();
+        GenerationParam param = GenerationParam.builder()
+                // 若没有配置环境变量，请用百炼API Key将下行替换为：.apiKey("sk-xxx")
+                .apiKey(TestApiKey.API_KEY)
+                // 此处以qwen-plus为例，可按需更换模型名称。模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
+                .model("qwen-plus")
+                .messages(Arrays.asList(systemMsg, userMsg))
+                .resultFormat(GenerationParam.ResultFormat.MESSAGE)
+                .build();
+        return gen.call(param);
+    }
+
+    public static void main(String[] args) {
+        try {
+            GenerationResult result = callWithMessage();
+            System.out.println(JsonUtils.toJson(result));
+        } catch (ApiException | NoApiKeyException | InputRequiredException e) {
+            // 使用日志框架记录异常信息
+            System.err.println("An error occurred while calling the generation service: " + e.getMessage());
+        }
+        System.exit(0);
+    }
+}
+```
+
+###### 4）运行项目，成功看到AI的回复
+
+![image-20250608222328609](images/Ai 超级智能体/image-20250608222328609.png)
+
+#### HTTP接入
+
+有一些模型并没有提供SDK接入的方式，那么如果执着使用的话，只能通过HTTP请求了。
+
+依旧参考文档：
+
+![image-20250608222620696](images/Ai 超级智能体/image-20250608222620696.png)
+
+可以将上述发送请求的代码换成对应的java、GoLang等代码，如果觉得浪费时间，直接使用AI生成，提示Prompt:
+
+```shell
+将上述请求转换为 hutool 工具类的请求代码
+```
+
+生成代码如下：
+
+```java
+public class HttpAiInvoke {
+    public static void main(String[] args) {
+        // 替换为你的实际 API 密钥
+        String url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
+
+        // 设置请求头
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + TestApiKey.API_KEY);
+        headers.put("Content-Type", "application/json");
+
+        // 设置请求体
+        JSONObject requestBody = new JSONObject();
+        requestBody.put("model", "qwen-plus");
+
+        JSONObject input = new JSONObject();
+        JSONObject[] messages = new JSONObject[2];
+
+        JSONObject systemMessage = new JSONObject();
+        systemMessage.put("role", "system");
+        systemMessage.put("content", "You are a helpful assistant.");
+        messages[0] = systemMessage;
+
+        JSONObject userMessage = new JSONObject();
+        userMessage.put("role", "user");
+        userMessage.put("content", "你是谁？");
+        messages[1] = userMessage;
+
+        input.put("messages", messages);
+        requestBody.put("input", input);
+
+        JSONObject parameters = new JSONObject();
+        parameters.put("result_format", "message");
+        requestBody.put("parameters", parameters);
+
+        // 发送请求
+        HttpResponse response = HttpRequest.post(url)
+                .addHeaders(headers)
+                .body(requestBody.toString())
+                .execute();
+
+        // 处理响应
+        if (response.isOk()) {
+            System.out.println("请求成功，响应内容：");
+            System.out.println(response.body());
+        } else {
+            System.out.println("请求失败，状态码：" + response.getStatus());
+            System.out.println("响应内容：" + response.body());
+        }
+    }
+}
+```
+
+#### Spring AI
+
+Spring AI是Spring生态系统的新成员，旨在简化AI功能与Spring应用的集成。SpringAI通过提供统一接口、支持集成多种AI服务提供商和模型类型、各种AI开发常用特性（RAG知识库、Tools工具调用和MCP模型上文协议），简化了应用开发代码，使得开发者能够专注于业务逻辑，提高了开发效率。
+
+Spring AI默认没有支持国内的模型，更多的是支持兼容OpenAI API 的大模型的集成，可以参考官方的模型对比。如果要使用阿里系的大模型，建议直接使用阿里自主封装的Spring AI Alibaba框架（https://java2ai.com/docs/1.0.0-M6.1/overview/?spm=4347728f.6476bf87.0.0.a3c1556bpqZcox）。
+
+1） 引入依赖
+
+```xml
+    <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-starter</artifactId>
+            <version>1.0.0-M6.1</version>
+        </dependency>
+
+    <repositories>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+```
+
+2）编写配置类：
+
+application-local.yml
+
+```yaml
+spring:
+  application:
+    name: spring-ai-alibaba-qwq-chat-client-example
+  ai:
+    dashscope:
+      api-key: ********
+      chat:
+        options:
+          model: qwen-plus
+```
+
+3）编写实例代码，注意要注入`dashscopeChatModel`：
+
+```java
+@Component
+public class SpringAiAiInvoke implements CommandLineRunner {
+    @Resource
+    private ChatModel dashscopeChatModel;
+    @Override
+    public void run(String... args) throws Exception {
+        AssistantMessage output = dashscopeChatModel.call(new Prompt("你好，我是林彪，请帮我写一周关于6月4号的七言绝句"))
+                .getResult()
+                .getOutput();
+        System.out.println(output.getText());
+    }
+}
+```
+
+上述代码实现了`CommandLineRunner`接口，我们启动Spring Boot项目时，会自动注入大模型ChatModel依赖，并单词执行该类的run方法，达到测试的效果。
+
+![image-20250608224723624](images/Ai 超级智能体/image-20250608224723624.png)
+
+上述代码中我们是通过使用ChatModel的方式调用大模型，适合于简单的对话场景，除了这种方式还有ChatClient方式，提供更多的高级功能（对话记忆），适合负责场景，在后续的AI应用开发章节会有详细介绍。
+
+#### LangChain4j
+
+和Spring AI的作用一致，langchain4j是没有支持阿里系的大模型的，只能使用社区版本的大模型包。
+
+要接入阿里云灵积模型，参考https://docs.langchain4j.dev/integrations/language-models/dashscope/
+
+1）首先引入依赖
+
+```xml
+<!-- https://mvnrepository.com/artifact/dev.langchain4j/langchain4j-community-dashscope -->
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-community-dashscope</artifactId>
+    <version>1.0.0-beta2</version>
+</dependency>
+```
+
+2）参考文档来编写实例对话代码，创建了一个ChatModel并调用
+
+```java
+public class LangChainAiInvoke {
+
+    public static void main(String[] args) {
+        ChatLanguageModel qwenModel = QwenChatModel.builder()
+                .apiKey(TestApiKey.API_KEY)
+                .modelName("qwen-max")
+                .build();
+        String answer = qwenModel.chat("你好");
+        System.out.println(answer);
+    }
+}
+```
+
+#### 总结
+
+推荐使用Spring AI，一方面是属于Spring生态，另一个方面是简单易用，利于学习。
+
+#### 扩展
+
+如果需要进行本地部署的话，使用ollama进行处理。
+
+可以直接参考ollama官网进行下载安装
+
+```shell
+ollama run deepseek-r1:1.5b
+```
+
+后端中引入依赖：
+
+```xml
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-ollama-spring-boot-starter</artifactId>
+            <version>1.0.0-M6</version>
+        </dependency>
+
+<repositories>
+   <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+  </repositories>
+```
+
+配置文件：
+
+```yaml
+spring:
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: gemma3:1b
+```
+
+新建一个invoke类
+
+```java
+@Component
+public class OllamaAiInvoke implements CommandLineRunner {
+
+    @Resource
+    private ChatModel ollamaChatModel;
+    @Override
+    public void run(String... args) throws Exception {
+        AssistantMessage output = ollamaChatModel.call(new Prompt("你好，我是李白，请帮我生成一段诗歌，必须是七言绝句"))
+                .getResult()
+                .getOutput();
+        System.out.println(output.getText());
+    }
+}
+```
+
+启动成功之后即可。
 
 
 
