@@ -1007,9 +1007,251 @@ param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 1)
 
 如果不使用这个Spring AI框架的话，就需要自己维护消息列表，代码非常复杂。需要自己手动维护，🤮
 
+### 扩展芝士
 
+#### 自定义Advisor
 
+##### 自定义Advisor步骤
 
+1）选择合适的接口实现，实现以下接口之一或同时实现两者（建议同时实现）：
+
+- CallAroundAdvisor：用于处理同步请求和响应（非流式）
+- StreamAroundAdvisor：用于处理流失请求和响应
+
+2）实现核心方法
+
+对于非流式处理，实现aroundCall方法：
+
+```java
+@Override
+public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
+    // 1. 处理请求（前置处理）
+    AdvisedRequest modifiedRequest = processRequest(advisedRequest);
+    
+    // 2. 调用链中的下一个Advisor
+    AdvisedResponse response = chain.nextAroundCall(modifiedRequest);
+    
+    // 3. 处理响应（后置处理）
+    return processResponse(response);
+}
+```
+
+对于流式处理，实现aroundCall方法：
+
+```java
+@Override
+public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
+    // 1. 处理请求
+    AdvisedRequest modifiedRequest = processRequest(advisedRequest);
+    
+    // 2. 调用链中的下一个Advisor并处理流式响应
+    return chain.nextAroundStream(modifiedRequest)
+               .map(response -> processResponse(response));
+}
+```
+
+3）设置执行顺序
+
+通过实现`getOrder()`方法指定Advisor在链中的执行顺序。值越小优先级越高，越先执行
+
+```java
+@Override
+public int getOrder() {
+    // 值越小优先级越高，越先执行
+    return 100; 
+}
+```
+
+4）提供唯一名称
+
+为每一个Advisor提供一个唯一标识符
+
+```java
+@Override
+public String getName() {
+    return "鱼皮自定义的 Advisor";
+}
+```
+
+我们参考官方文档实现两个自定义的Advisor：1.自定义日志Advisor；2.重读Advisor
+
+###### 自定义日志Advisor
+
+虽然SpringAI已经实现了SimpleLogger日志拦截器，但是日志的级别是debug，默认的Boot使用的日志是info。看不到打印信息。
+
+可以直接通过实现配置文件指定文件的输出级别
+
+```yaml
+logging:
+  level:
+    org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: debug
+```
+
+但是为了更加灵活的使用日志打印，建议自己实现一个自定义的Advisor。
+
+参考官方文档：https://docs.spring.io/spring-ai/reference/api/advisors.html#_logging_advisor和内置的SimpleLoggerAdvisor，结合两者略微做修改，开发一个更加精简的、可自定义的日志记录器。默认打印是info级别。
+
+新建包`advisor`，编写Advisor的代码。
+
+```java
+@Slf4j
+public class MyLoggerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+    private AdvisedRequest before(AdvisedRequest request) {
+        log.info("request: {}", request.userText());
+        return request;
+    }
+
+    private void observeAfter(AdvisedResponse advisedResponse) {
+        log.info("response: {}", advisedResponse.response().getResult().getOutput().getText());
+    }
+    @Override
+    public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
+        advisedRequest = this.before(advisedRequest);
+        AdvisedResponse advisedResponse = chain.nextAroundCall(advisedRequest);
+        this.observeAfter(advisedResponse);
+        return advisedResponse;
+    }
+
+    @Override
+    public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
+        advisedRequest = this.before(advisedRequest);
+        Flux<AdvisedResponse> advisedResponses = chain.nextAroundStream(advisedRequest);
+        return (new MessageAggregator()).aggregateAdvisedResponse(advisedResponses, this::observeAfter);
+
+    }
+
+    @Override
+    public String getName() {
+        return this.getClass().getSimpleName();
+    }
+
+    @Override
+    public int getOrder() {
+        return 0;
+    }
+}
+```
+
+上述代码中值得关注的是aroundStream方法的返回，通过MessageAggregator工具类将Flux响应聚合成单个AdvisorResponse。对于日志记录或其他需要观察整个响应而非流中各个独立项的处理十分有用。
+
+在`LoveApp`中应用自定义的日志Advisor：
+
+```java
+chatClient = ChatClient.builder(dashscopeChatModel)
+        .defaultSystem(SYSTEM_PROMPT)
+        .defaultAdvisors(
+                new MessageChatMemoryAdvisor(chatMemory),
+                // 自定义日志 Advisor，可按需开启
+                new MyLoggerAdvisor(),
+        )
+        .build();
+```
+
+###### 自定义Re-Reading Advisor
+
+我们继续参考官方文档：https://docs.spring.io/spring-ai/reference/api/advisors.html#_re_reading_re2_advisor来实现一个Re-Reading（重读）Advisor，又称为Re2。该技术通过让模型重新阅读问题来提高推理能力，有文献来印证它的效果。
+
+> 注意：虽然这个技术可以提高大模型的推理能力，不过成本会加倍，如果应用是面向C端用户的话，不建议开启。
+
+Re2 实现原理也是十分简单，改写用户Prompt为下列格式，让AI重复阅读用户的输入：
+
+```markdown
+{Input_Query}
+Read the question again: {Input_Query}
+```
+
+需要对请求进行拦截并改写userText，对应的代码如下：
+
+```java
+@Slf4j
+public class ReReadingAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+
+    private AdvisedRequest before(AdvisedRequest advisedRequest) {
+
+        Map<String, Object> advisedUserParams = new HashMap<>(advisedRequest.userParams());
+        advisedUserParams.put("re2_input_query", advisedRequest.userText());
+
+        return AdvisedRequest.from(advisedRequest)
+                .userText("""
+			    {re2_input_query}
+			    Read the question again: {re2_input_query}
+			    """)
+                .userParams(advisedUserParams)
+                .build();
+    }
+
+    @Override
+    public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
+        return chain.nextAroundCall(this.before(advisedRequest));
+    }
+
+    @Override
+    public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
+        return chain.nextAroundStream(this.before(advisedRequest));
+    }
+
+    @Override
+    public String getName() {
+        return this.getClass().getSimpleName();
+    }
+
+    @Override
+    public int getOrder() {
+        return 0;
+    }
+}
+```
+
+可以在LoveApp中使用Advisor，并进行测试，查看请求是否被改写。
+
+```java
+chatClient = ChatClient.builder(dashscopeChatModel)
+        .defaultSystem(SYSTEM_PROMPT)
+        .defaultAdvisors(
+                new MessageChatMemoryAdvisor(chatMemory),
+                // 自定义推理增强 Advisor，可按需开启
+                new ReReadingAdvisor()
+        )
+        .build();
+```
+
+**最佳实践**
+
+1. 保持单一职责：每一个Advisor专注于一个职责
+2. 执行顺序：合理设计`getOrder()`确保Advisor按照正确的顺序执行
+3. 同时支持流式和非流式：尽可能实现两种接口提高灵活性
+4. 高效处理请求：避免在Advisor中执行耗时操作
+5. 测试边界情况：确保Advisor能够优雅处理异常和边界情况
+6. 对于需要处理复杂的流逝场景：可以使用Reactor响应式操作符
+
+```java
+@Override
+public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
+    return Mono.just(advisedRequest)
+           .publishOn(Schedulers.boundedElastic())
+           .map(request -> {
+               // 请求前处理逻辑
+               return modifyRequest(request);
+           })
+           .flatMapMany(request -> chain.nextAroundStream(request))
+           .map(response -> {
+               // 响应处理逻辑
+               return modifyResponse(response);
+           });
+}
+```
+
+7. 可以使用`adviseContext`在Advisor链中共享状态
+
+```java
+adviseRequest = adviseRequest.updateContext(context -> {
+  context.put("key", "value");
+  return context;
+});
+
+// 读取上下文
+Object value = adviseResponse.adviseContext().get("key");
+```
 
 
 
