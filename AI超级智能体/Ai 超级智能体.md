@@ -577,7 +577,345 @@ public class OllamaAiInvoke implements CommandLineRunner {
 
 启动成功之后即可。
 
+## AI应用开发
 
+### Prompt工程
+
+#### 基本概念
+
+Prompt工程又称为提示词工程，简而言之就是输入给AI指令。那为什么叫做“工程”呢？
+
+因为利用AI生成的内容是不确定的，构建一个能够按照预期生成内容的提示词是一门艺术，也是一门科学。提示词的质量会直接影响到AI大模型的输出结果。
+
+#### 提示词分类
+
+**核心-基于角色分类**
+
+在AI对话中，基于角色分类是最常见的，通常存在三种主要类型的Prompt：
+
+1）用户Prompt（User Prompt）：这是用户向AI提供的实际问题、指令和信息，传达了用户的直接需求
+
+```shell
+用户：帮我生成一篇关于春天的短诗
+```
+
+2）系统Prompt（System Prompt）：这是设置AI大模型行为规则和角色定位的隐藏指令，用户通常不能直接看到。系统Prompt相当于告诉AI设定人格和能力边界，即告诉AI“你是谁？你能做什么？”
+
+```shell
+系统：你是一位经验丰富的法律顾问，擅长分析各种复杂的案情，请以专业的角度回答用户的问题，必要时需要主动询问更多信息以提供更加准确的建议，不作出道德判断，尊重用户的提出所有的案子。
+```
+
+不同的系统Prompt可以让同一个AI模型表现出完全不同的应用特性，这是构建垂直领域AI应用（财务顾问、教育辅导、医疗咨询）等的关键。
+
+3）助手Prompt（Assistant Prompt）：这是AI模型响应内容，在多轮对话中，之前的助手回复也会成为当前上下文的一部分，影响后续对话的理解和生成，某一些场景下，开发者可以主动预设一些助手消息作为对话历史的一部分，引导后续执行
+
+```shell
+助手：我是你的恋爱顾问，很高兴能帮助你解决情感问题。你目前遇到了什么恋爱困惑呢？可以告诉我你的现状和具体遇到的情况。
+```
+
+在实际应用中，这些不同类型的提示词往往会组合使用。
+
+```shell
+系统：你是编程导航的专业编程导师，擅长引导初学者入门编程并制定学习路径。使用友好鼓励的语气，解释复杂概念时要通俗易懂，适当使用比喻让新手理解，避免过于晦涩的技术术语。
+
+用户：我完全没有编程基础，想学习编程开发，但不知道从何开始，能给我一些建议吗？
+
+助手：欢迎加入编程的世界！作为编程小白，建议你可以按照以下步骤开始学习之旅...
+
+【多轮对话继续】
+```
+
+大模型平台支持用户自主设置各种不同类型的提示词来进行调试。
+
+![image-20250609221304624](images/Ai 超级智能体/image-20250609221304624.png)
+
+**基于功能的分类**
+
+除了基于角色的分类外，我们还可以从功能角度出发，对提示词进行分类。
+
+1）指令型提示词：明确告知AI需要执行什么任务，通常是以命令式语句开头。
+
+```shell
+翻译以下文本为英文：春天来了，花儿开了。
+```
+
+2）对话型提示词：模拟自然语言，问答的形式与AI模型交互。
+
+```shell
+你认为人工智能会在未来取代人类工作吗？
+```
+
+3）创意型提示词：引导AI大模型进行创意内容生成，如故事、诗歌、广告文案等。
+
+```shell
+写一个发生在未来太空殖民地的短篇科幻故事，主角是一位机器人工程师。
+```
+
+4）角色扮演提示词：让AI扮演特定角色或人物进行回答。
+
+```shell
+假设你是爱因斯坦，如何用简单的语言解释相对论？
+```
+
+5）少样本学习提示词：提供一些示例，引导AI理解所需要的输出格式和风格。
+
+```sehll
+将以下句子改写为正式商务语言：
+示例1：
+原句：这个想法不错。
+改写：该提案展现了相当的潜力和创新性。
+
+示例2：
+原句：我们明天见。
+改写：期待明日与您会面，继续我们的商务讨论。
+
+现在请改写：这个价格太高了。
+```
+
+#### Token
+
+**如何计算Token？**
+
+对于不同的大模型对于Token的划分规则略有不同，比如根据OpenAI的文档：
+
+- 英文文本：一个Token大约是4个字符或者0.75个英文单词
+- 中文文本：一个汉字一般是一到两个Token
+- 空格和标点：也会计入Token使用量
+- 特殊符号和表情符号：需要更多的token
+
+### 应用方案设计
+
+整体方案围绕着2个核心展开
+
+- 系统提示词的优化
+- 多轮对话的实现
+
+#### 1、系统提示词的优化
+
+前面提到，系统提示词相当于AI应用的“灵魂”，直接决定了AI的行为模式、专业性和交互风格。
+
+对于AI对话应用，最简单的就是直接写一段系统预设，定义“你是谁？能做什么？”，比如：
+
+```markdown
+你是一位恋爱大师，为用户提供情感咨询服务
+```
+
+这种简单的提示虽然也可以工作，但是效果不尽人意，付诸实际的话，我们在现实中找专家咨询时候，专家可能会抛出很多引导性的问题，比如：
+
+1. 最近有什么迷茫的事情吗？
+2. 最近有收到什么伤吗？
+3. 你们近期出现的感情问题是什么？
+
+用户会对AI进行多轮对话，这个时间的AI的不能像失忆一样，而是要始终保持着之间的对话内容作为上下文，不断的深入了解用户，提供支持。
+
+因此我们要优化系统预设，可以借助AI进行优化，比如：
+
+```markdown
+我正在开发【恋爱大师】AI 对话应用，请你帮我编写设置给 AI 大模型的系统预设 Prompt 指令。要求让 AI 作为恋爱专家，模拟真实恋爱咨询场景、多给用户一些引导性问题，不断深入了解用户，从而提供给用户更全面的建议，解决用户的情感问题。
+```
+
+AI 提供的优化后的系统提示词：
+
+```markdown
+扮演深耕恋爱心理领域的专家。开场向用户表明身份，告知用户可倾诉恋爱难题。围绕单身、恋爱、已婚三种状态提问：单身状态询问社交圈拓展及追求心仪对象的困扰；恋爱状态询问沟通、习惯差异引发的矛盾；已婚状态询问家庭责任与亲属关系处理的问题。引导用户详述事情经过、对方反应及自身想法，以便给出专属解决方案。
+```
+
+在正式开发之前，建议先使用AI大模型平台对提示词进行优化。
+
+#### 多轮对话实现
+
+要实现具有“记忆力”的AI应用，让AI能够记住用户之前的对话内容并保持上下文的连贯性，我们可以使用SpringAI的对话记忆功能。
+
+##### ChatClient特性
+
+之前我们是直接使用ChatModel进行调用SpringAI的，而使用ChatClient可实现功能更加丰富、更灵活的AI对话客户端，也更推荐通过这种方式调用AI。
+
+通过示例代码，能够感受到ChatModel和ChatClient的区别，ChatClient支持更复杂的链式调用：
+
+```java
+ChatClient chatClient = ChatClient.builder(dashscopeChatModel)
+                .defaultSystem("你是恋爱顾问")
+                .build();
+        String response = chatClient.prompt().user("你好").call().content();
+        System.out.println("响应：" + response);
+```
+
+SpringAI 提供了多种构建ChatClient的方式，比如自动注入、构造者模式构建：
+
+```java
+// 方式1：使用构造器注入
+@Service
+public class ChatService {
+    private final ChatClient chatClient;
+    
+    public ChatService(ChatClient.Builder builder) {
+        this.chatClient = builder
+            .defaultSystem("你是恋爱顾问")
+            .build();
+    }
+}
+
+// 方式2：使用建造者模式
+ChatClient chatClient = ChatClient.builder(chatModel)
+    .defaultSystem("你是恋爱顾问")
+    .build();
+```
+
+ChatClient支持多种响应格式，比如返回ChatResponse对象、返回实体对象、流式返回：
+
+```java
+// ChatClient支持多种响应格式
+// 1. 返回 ChatResponse 对象（包含元数据如 token 使用量）
+ChatResponse chatResponse = chatClient.prompt()
+    .user("Tell me a joke")
+    .call()
+    .chatResponse();
+
+// 2. 返回实体对象（自动将 AI 输出映射为 Java 对象）
+// 2.1 返回单个实体
+record ActorFilms(String actor, List<String> movies) {}
+ActorFilms actorFilms = chatClient.prompt()
+    .user("Generate the filmography for a random actor.")
+    .call()
+    .entity(ActorFilms.class);
+
+// 2.2 返回泛型集合
+List<ActorFilms> multipleActors = chatClient.prompt()
+    .user("Generate filmography for Tom Hanks and Bill Murray.")
+    .call()
+    .entity(new ParameterizedTypeReference<List<ActorFilms>>() {});
+
+// 3. 流式返回（适用于打字机效果）
+Flux<String> streamResponse = chatClient.prompt()
+    .user("Tell me a story")
+    .stream()
+    .content();
+
+// 也可以流式返回ChatResponse
+Flux<ChatResponse> streamWithMetadata = chatClient.prompt()
+    .user("Tell me a story")
+    .stream()
+    .chatResponse();
+```
+
+可以给ChatClient设置默认参数，比如系统提示词，还可以在对话时动态更改提示词的变量，类似于模板的概念：
+
+```java
+// 定义默认系统提示词
+ChatClient chatClient = ChatClient.builder(chatModel)
+        .defaultSystem("You are a friendly chat bot that answers question in the voice of a {voice}")
+        .build();
+
+// 对话时动态更改系统提示词的变量
+chatClient.prompt()
+        .system(sp -> sp.param("voice", voice))
+        .user(message)
+        .call()
+        .content());
+```
+
+此外还支持指定默认对话选项、默认拦截器、默认函数调用等等。
+
+##### Advisors
+
+SpringAI 使用Advisors（顾问）机制来增强AI的能力，可以理解成一系列可插拔的拦截器，在调用AI前和调用AI后可以执行一些额外的操作。
+
+- 前置增强：调用AI前改写一下Prompt提示词、检查一下提示词是否安全
+- 后置增强：调用AI后记录一下日志、处理一下返回的结果
+
+为了方便理解，后续叫这个就叫做拦截器了。
+
+可以直接为ChatClient指定默认拦截器，比如对话记忆拦截器MessageChatMemoryAdvisor可以帮助我们实现多轮对话能力，省去了自己维护对话列表的麻烦。
+
+```java
+var chatClient = ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        new MessageChatMemoryAdvisor(chatMemory), // 对话记忆 advisor
+        new QuestionAnswerAdvisor(vectorStore)    // RAG 检索增强 advisor
+    )
+    .build();
+
+String response = this.chatClient.prompt()
+    // 对话时动态设定拦截器参数，比如指定对话记忆的 id 和长度
+    .advisors(advisor -> advisor.param("chat_memory_conversation_id", "678")
+            .param("chat_memory_response_size", 100))
+    .user(userText)
+    .call()
+	.content();
+```
+
+Advisors的原理图如下：
+
+![image-20250609232158320](images/Ai 超级智能体/image-20250609232158320.png)
+
+实际开发过程中，我们会用到多个拦截器，组合在一起相当于一条责任链。每一个拦截器是有顺序的，通过`getOrder()`方法获取到顺序，值越低越先执行。
+
+```java
+var chatClient = ChatClient.builder(chatModel)
+    .defaultAdvisors(
+        new MessageChatMemoryAdvisor(chatMemory), // 对话记忆 advisor
+        new QuestionAnswerAdvisor(vectorStore)    // RAG 检索增强 advisor
+    )
+    .build();
+```
+
+执行顺序是按照`getOrder()`方法决定的，不是简单的根据代码的编写顺序决定。
+
+![image-20250609232626950](images/Ai 超级智能体/image-20250609232626950.png)
+
+> 上述是Advisor类图
+
+Advisors分成了两种模式：流式Streaming和非流式Non-Streaming，二者在用法上没有明显的区别，返回值不同罢了。但是如果我们要自主实现Advisors，为了保证通用性，最好还是同时实现流式和非流式的环绕通知方法。
+
+![image-20250609232932163](images/Ai 超级智能体/image-20250609232932163.png)
+
+##### Chat Memory Advisor
+
+如果要实现会话记忆功能，可以使用Spring AI 的ChatMemoryAdvisor，主要有几种内置的实现方式：
+
+- MessageChatMemoryAdvisor：从记忆中检索历史对话，并将其作为消息集合添加到提示词中
+- promptChatMemoryAdvisor：从记忆中检索历史对话，并将其添加到提示词的系统文本中。
+- VectorStoreChatMemoryAdvisor：可以用向量数据库来存储检索历史的对话。
+
+前两者功能相似，略有区别：
+
+1）MessageChatMemoryAdvisor将对话历史作为乙烯类独立的消息添加到提示中，保留完整的结构，包含每条消息角色标识：
+
+```	json
+[
+  {"role": "user", "content": "你好"},
+  {"role": "user", "content": "你好，讲个笑话"},
+  {"role": "user", "content": "再讲一个"}
+]
+```
+
+2）PromptChatMemoryAdvisor将对话历史添加到提示词的系统文本部分，因此可能失去原始的消息边界。
+
+```json
+以下是之前的对话历史：
+用户: 你好
+助手: 你好！有什么我能帮助你的吗？
+用户: 讲个笑话
+
+现在请继续回答用户的问题。
+```
+
+一般的话直接使用MessageChatMemoryAdvisor即可。
+
+##### ChatMemory
+
+上述的ChatMemoryAdvisor都依赖于ChatMemory进行构造，ChatMemory负责历史对话的存储，定义了保存消息、查询消息、清空消息历史的方法。
+
+![image-20250609234435088](images/Ai 超级智能体/image-20250609234435088.png)
+
+Spring AI 内置了几种ChatMemory，可以将对话保存到不同的数据源中，比如：
+
+- InMemoryChatMemory：内存存储
+- CassandraChatMemory:在Cassandra中带有过期时间的持久化存储
+- Neo4jChatMemory：在Neo4J中没有过期时间限制的持久化存储
+- JdbcChatMemory：在JDBC中没有过期时间限制的持久化存储
+
+当然也可以通过实现ChatMemory接口自定义数据源的存储。
 
 
 
