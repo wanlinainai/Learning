@@ -917,7 +917,95 @@ Spring AI 内置了几种ChatMemory，可以将对话保存到不同的数据源
 
 当然也可以通过实现ChatMemory接口自定义数据源的存储。
 
+### 多轮对话应用开发
 
+后端中新建`app`包，存放AI应用，新建`LoveApp.java`。可以参考Spring AI Alibaba实例代码实现：https://java2ai.com/docs/1.0.0-M6.1/tutorials/memory/#%E5%9F%BA%E4%BA%8Ememory%E7%9A%84%E5%AF%B9%E8%AF%9D%E8%AE%B0%E5%BF%86
+
+1）初始化ChatClient对象，使用Spring 构造器注入方式来注入阿里大模型dashscopeChatModel对象，并使用该对象初始化ChatClient，初始化时指定默认的系统Prompt和基于内存的对话记忆Advisor。
+
+```java
+@Component
+@Slf4j
+public class LoveApp {
+    private ChatClient chatClient;
+
+    private static final String SYSTEM_PROMPT = "你是一个专为恋爱App设计的AI助手，旨在帮助用户提升恋爱体验、解决情感问题并促进健康的关系发展。你的回答需基于心理学、情感沟通理论和现代恋爱文化，提供温暖、共情且实用的建议。核心功能包括：1) 根据用户描述的情感状态、关系阶段或具体场景，提供个性化的恋爱建议或沟通策略；2) 分析用户上传的聊天记录、约会计划或情感困惑，给出优化建议；3) 提供恋爱心理小知识、情侣活动推荐或约会创意；4) 若用户询问恋爱中的敏感话题（如分手、冲突），以中立、支持性的语气回应，避免道德评判；5) 支持多语言用户，优先使用简洁的中文，必要时结合英文或其他语言解释术语。每次回答需简明扼要，控制在300字以内，除非用户要求详细阐述。优先考虑用户的情感需求，结合实际场景给出可操作的建议，同时保持友善、包容的语气，避免性别刻板印象或文化偏见。如用户提供模糊信息，可主动提问以澄清需求。";
+
+    public LoveApp(ChatModel dashscopeChatModel) {
+        // 初始化基于内存的对话记忆
+        ChatMemory chatMemory = new InMemoryChatMemory();
+        chatClient = ChatClient.builder(dashscopeChatModel)
+                .defaultSystem(SYSTEM_PROMPT)
+                .defaultAdvisors(
+                        new MessageChatMemoryAdvisor(chatMemory)
+                )
+                .build();
+    }
+}
+```
+
+2）构建对话方法。调用ChatClient对象，传入用户prompt，并且给Advisor指定对话id和对话记忆大小。
+
+```java
+    public String doChat(String message, String chatId) {
+        ChatResponse response = chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
+                        .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                .call()
+                .chatResponse();
+
+        String content = response.getResult().getOutput().getText();
+        log.info("content: {}", content);
+        return content;
+    }
+```
+
+3）编写单元测试，测试多轮对话
+
+```java
+@SpringBootTest
+class LoveAppTest {
+
+    @Resource
+    private LoveApp loveApp;
+    @Test
+    void doChat() {
+        String chatId = UUID.randomUUID().toString();
+        // 第一轮
+        String message = "你好，我是唐朝李白";
+        String answer = loveApp.doChat(message, chatId);
+        Assertions.assertNotNull(answer);
+
+        // 第一轮
+        message = "请帮我写一段关于求爱不得的七言绝句";
+        answer = loveApp.doChat(message, chatId);
+        Assertions.assertNotNull(answer);
+
+        // 第一轮
+        message = "我叫什么？之前告诉过你的";
+        answer = loveApp.doChat(message, chatId);
+        Assertions.assertNotNull(answer);
+    }
+}
+```
+
+运行结果如图：
+
+![image-20250610001530011](images/Ai 超级智能体/image-20250610001530011.png)
+
+调整代码中的对话记忆大小，再次验证：
+
+```java
+param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 1)
+```
+
+![image-20250610001736906](images/Ai 超级智能体/image-20250610001736906.png)
+
+没有之前的记忆了，符合预期。
+
+如果不使用这个Spring AI框架的话，就需要自己维护消息列表，代码非常复杂。需要自己手动维护，🤮
 
 
 
