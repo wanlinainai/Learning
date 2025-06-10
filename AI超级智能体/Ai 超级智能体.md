@@ -1461,9 +1461,144 @@ AI生成的内容如下，是JSON格式文本：
 3. 选择支持结构化输出的合适模型
 4. 对于负责数据结构，考虑使用`ParameterizedTypeReference`
 
+#### 对话记忆持久化
 
+之前我们使用内存对话记忆来保存对话的上下文，但是如果服务器重启了，对话记忆就会消失。有时，我们可以希望将对话记忆持久化，保存到文件、数据库、Redis或者其他对象存储中。
 
+##### 利用现有依赖实现
 
+[官方提供](https://docs.spring.io/spring-ai/reference/api/chatclient.html#_chat_memory)了一些第三方数据库的整合支持，可以根据对话将对话保存到不同的数据源中。比如：
+
+- InMemoryChatMemory：内存存储
+- CassandraChatMemory：在Cassandra中带有过期时间的持久化存储
+- Neo4jChatMemory：在Neo4J中没有过期时间限制的持久化存储
+- JdbcChatMemory：在JDBC中没有过期时间限制的持久化存储
+
+如果要用到数据库持久话，JDBCChatMemory可以使用。但是依赖很少，缺少相关的介绍，Maven仓库也搜不到，不推荐使用。
+
+[Spring仓库](https://repo.spring.io/ui/packages/gav:%2F%2Forg.springframework.ai:spring-ai-starter-model-chat-memory-jdbc?name=spring-ai-starter-model-chat-memory-jdbc&type=packages)能搜到，但是用的人很少，由此可见，我们一般不会用
+
+![image-20250611004606714](images/Ai 超级智能体/image-20250611004606714.png)
+
+##### 自定义实现
+
+SpringAI的对话记忆实现非常巧妙，解耦了“**存储**”和“**记忆算法**”，使得我们可以单独修改ChatMemory存储来改变对话记忆的保存位置，而无需修改保存对话记忆的流程。
+
+虽然官方没有给我们提供自定义的ChatMemory实现的示例，我们可以直接去阅读实现类InMemoryChatmemory源码。
+
+ChatMemory接口方法有add、get、clear![image-20250611005137731](images/Ai 超级智能体/image-20250611005137731.png)
+
+InMemoryChatMemory是利用ConcurrentHashMap实现的一个存储记忆结构，Key是唯一的对话ID，value是对话列表
+
+![image-20250611005246148](images/Ai 超级智能体/image-20250611005246148.png)
+
+##### 自定义实现持久化ChatMemory
+
+由于数据库持久化还需要引入额外的依赖，比较麻烦，由此实现一个基于文件读写的ChatMemory。
+
+> 一个主要问题是**消息和文本的转换**，我们在保存消息时，要将消息从Message对象转成文件内的文本；读取消息时要将文本转成Message对象。
+
+> 如果想要实现JSON序列化，难度很高。
+>
+> 1. 要持久化的Message是一个接口，很多子类实现（UserMessage、SystemMessage）
+> 2. 每一种子类所拥有的字段不同，结构不统一
+> 3. 子类未实现Serializable接口
+
+![image-20250611005728228](images/Ai 超级智能体/image-20250611005728228.png)
+
+如果使用JSON会出现很多错误，所以使用：**Kryo序列化库**
+
+1）引入依赖：
+
+```xml
+        <dependency>
+            <groupId>com.esotericsoftware</groupId>
+            <artifactId>kryo</artifactId>
+            <version>5.6.2</version>
+        </dependency>
+```
+
+2）创建一个`chatmemory`包，编写基于文件持久化的对话记忆`FileBasedChatMemory`，代码如下：
+
+```java
+public class FileBasedChatMemory implements ChatMemory {
+    private final String BASE_DIR;
+
+    private static final Kryo kryo = new Kryo();
+
+    static {
+        kryo.setRegistrationRequired(false);
+        // 设置实例化策略
+        kryo.setInstantiatorStrategy(new StdInstantiatorStrategy());
+    }
+
+    public FileBasedChatMemory(String dir) {
+        this.BASE_DIR = dir;
+        File baseDir = new File(dir);
+        // 如果没有文件夹则创建
+        if (!baseDir.exists()) {
+            baseDir.mkdirs();
+        }
+    }
+
+    @Override
+    public void add(String conversationId, List<Message> messages) {
+        List<Message> conversationMessages = getOrCreateConversation(conversationId);
+        conversationMessages.addAll(messages);
+        saveConversation(conversationId, conversationMessages);
+    }
+
+    private void saveConversation(String conversationId, List<Message> messages) {
+        File file = getConversationFile(conversationId);
+        try (Output output = new Output(new FileOutputStream(file))) {
+            kryo.writeObject(output, messages);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public List<Message> get(String conversationId, int lastN) {
+        List<Message> allMessages = getOrCreateConversation(conversationId);
+        return allMessages.stream().skip(Math.max(0, allMessages.size() - lastN))
+                .toList();
+    }
+
+    @Override
+    public void clear(String conversationId) {
+        File file = getConversationFile(conversationId);
+        if (file.exists()) {
+            file.delete();
+        }
+    }
+
+    private List<Message> getOrCreateConversation(String conversationId) {
+        File file = getConversationFile(conversationId);
+        ArrayList<Message> messages = new ArrayList<>();
+        if (file.exists()) {
+            try (Input input = new Input(new FileInputStream(file))) {
+                messages = kryo.readObject(input, ArrayList.class);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return messages;
+    }
+
+    private File getConversationFile(String conversationId) {
+        return new File(BASE_DIR, conversationId + ".kryo");
+    }
+}
+```
+
+3）修改`LoveApp`的一开始的`InMemoryChatMemory`，换成`FileBasedChatMemory`。
+
+```java
+String fileDir = System.getProperty("user.dir") + "/tmp/chat-memory";
+        ChatMemory chatMemory = new FileBasedChatMemory(fileDir);
+```
+
+4）运行测试案例，结果如下：![image-20250611012747283](images/Ai 超级智能体/image-20250611012747283.png)
 
 
 
