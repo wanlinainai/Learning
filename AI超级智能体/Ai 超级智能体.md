@@ -1253,5 +1253,239 @@ adviseRequest = adviseRequest.updateContext(context -> {
 Object value = adviseResponse.adviseContext().get("key");
 ```
 
+#### 结构化输出
+
+结构化输出转换器（Structured Output Converter）是一个Spring AI 提供的一种适用机制，用于将大语言模型返回的文本输出转换为结构化数据格式，如JSON、XML、或者java类。
+
+##### 基本原理 - 工作流程
+
+结构化输出转换器在大模型调用前后都会发挥作用：
+
+- 调用前：转换器会在提示词后面加上附加的格式命令，明确告诉模型应该生成什么结构的输出，引导模型生成符合预期的响应
+- 调用后：转换器将模型的文本输出转换成结构化类型的实例，比如将原始文本映射成JSON、XML、或者特定数据结构。
+
+![image-20250610231418892](images/Ai 超级智能体/image-20250610231418892.png)
+
+结构化输出转换器只能尽最大可能将模型输出转换成结构化数据，AI模型不保证一定按照要求返回结构化输出。有一些模型可能不会理解提示词或无法按照要求生成结构化输出，建议在程序中实现验证机制或者异常处理机制来确保模型输出符合预期。
+
+##### 进阶原理 - API设计
+
+进一步理解结构化输出的原理，结构化输出转换器`StructuredOutputConverter`接口允许开发者获取结构化输出，例如将输出映射到java类或值数组，接口定义如下：
+
+```java
+public interface StructuredOutputConverter<T> extends Converter<String, T>, FormatProvider {
+
+}
+```
+
+集成了两个关键接口：
+
+- `FormatProvider`接口：提供特定的格式指令给AI模型
+- Spring的`Coverter<String, T>`接口，负责将模型文本输出转化成指定目标类型T
+
+```java
+public interface FormatProvider {
+    String getFormat();
+}
+```
+
+SpringAI 提供了多种转换器实现，分别将输出转化成不同的结构：
+
+- `AbstractConversionServiceOutputConverter<T>`:提供预配置的 [GenericConversionService](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/core/convert/support/GenericConversionService.html)，用于将LLM输出转化成所需格式
+- `AbstractMessageOutputConverter<T>`：支持Spring AI Message转换
+- `BeanOutputConverter<T>`：将输出转成javaBean对象（基于[ObjectMapper](https://blog.csdn.net/u011213044/article/details/120329436) 实现）
+- `MapOutputCobverter`：用于将输出转成Map结构
+- `ListOutputConverter`：用于将输出转成List结构
+
+![image-20250610233002511](images/Ai 超级智能体/image-20250610233002511.png)
+
+了解了API设计之后，进一步剖析一遍结构化输出的工作流程。
+
+1）在调用大模型之前，`FormatProvider`为AI模型提供特定的格式命令，使其能够生成可以通过`Converter`转换成制定目标类型文本输出
+
+转换器的格式命令组件会将类似于下面的格式指令附加到提示词中：
+
+```markdown
+Your response should be in JSON format.
+The data structure for the JSON should match this Java class: java.util.HashMap
+Do not include any explanations, only provide a RFC8259 compliant JSON response following this format without deviation.
+```
+
+通常，使用`PromptTemplate`将格式指令附加到用户输入的末尾，示例代码如下：
+
+```java
+StructuredOutputConverter outputConverter = ...
+String userInputTemplate = """
+        ... 用户文本输入 ....
+        {format}
+        """; // 用户输入，包含一个“format”占位符。
+Prompt prompt = new Prompt(
+        new PromptTemplate(
+                this.userInputTemplate,
+                Map.of(..., "format", outputConverter.getFormat()) // 用转换器的格式替换“format”占位符
+        ).createMessage());
+```
+
+稍后会讲解`PromptTemplate`属性。
+
+2）`Converter`负责将模型的输出文本转成指定类型的实例。
+
+流程图如下：
+
+![image-20250610233710985](images/Ai 超级智能体/image-20250610233710985.png)
+
+**使用实例**
+
+官方文档提供了很多转换的实例。
+
+1） `BeanOutputConverter`示例，将AI输出转成自定义的Java类：
+
+```java
+// 定义一个记录类
+record ActorsFilms(String actor, List<String> movies) {}
+
+// 使用高级 ChatClient API
+ActorsFilms actorsFilms = ChatClient.create(chatModel).prompt()
+        .user("Generate 5 movies for Tom Hanks.")
+        .call()
+        .entity(ActorsFilms.class);
+```
+
+还可用`ParameterizedTypeReference`构造函数来指定更复杂的目标类结构，比如自定义对象列表：
+
+```java
+// 可以转换为对象列表
+List<ActorsFilms> actorsFilms = ChatClient.create(chatModel).prompt()
+        .user("Generate the filmography of 5 movies for Tom Hanks and Bill Murray.")
+        .call()
+        .entity(new ParameterizedTypeReference<List<ActorsFilms>>() {});
+```
+
+2）MapOutputConverter示例，将模型输出转换成包含数字列表的Map：
+
+```java
+Map<String, Object> result = ChatClient.create(chatModel).prompt()
+        .user(u -> u.text("Provide me a List of {subject}")
+                    .param("subject", "an array of numbers from 1 to 9 under they key name 'numbers'"))
+        .call()
+        .entity(new ParameterizedTypeReference<Map<String, Object>>() {});
+```
+
+3）ListOutputConverter示例，将模型输出转成字符串列表;
+
+```java
+List<String> flavors = ChatClient.create(chatModel).prompt()
+                .user(u -> u.text("List five {subject}")
+                            .param("subject", "ice cream flavors"))
+                .call()
+                .entity(new ListOutputConverter(new DefaultConversionService()));
+```
+
+**支持AI模型**
+
+根据[官方文档](https://docs.spring.io/spring-ai/reference/api/structured-output-converter.html#_supported_ai_models) ,以下的AI已经经过测试，支持List、Map、Bean结构化输出：
+
+| AI 模型            | 示例测试代码                   |
+| ------------------ | ------------------------------ |
+| OpenAI             | OpenaiChatModelT               |
+| Anthropic Claude 3 | AnthropicChatModellT.java      |
+| Azure OpenAi       | AzureOpenAiChatModellT.java    |
+| mistral AI         | MistralAiChatModellT.java      |
+| Ollama             | OllamaChatModellT.java         |
+| Vertex AI Gemini   | VertexAiGeminiChatModellT.java |
+
+有一些模型自身提供了专门的**内置JSON格式**，用于生成结构化的JSON输出，无需关注细节，内置的JSON模式可以确保模型生成响应严格符合JSON格式，提高结构化输出的可能性。
+
+**恋爱报告功能开发**
+
+使用结构化输出，为用户生成恋爱报告，并转换成聊爱报告对象，包含报告标题和恋爱建议列表字段。
+
+1）引入JSON Scheme生成依赖：
+
+```xml
+<dependency>
+    <groupId>com.github.victools</groupId>
+    <artifactId>jsonschema-generator</artifactId>
+    <version>4.38.0</version>
+</dependency>
+```
+
+2）在LoveApp中定义恋爱报告类，可使用java14提供的`record`快速定义
+
+```java
+record LoveReport(String title, List<String> suggestions){}
+```
+
+3）在LoveApp中编写一个新方法，复用之前构造好的ChatClient对象，只需额外补充原有的系统提示词、并且添加结构化输出代码即可。
+
+```java
+public LoveReport doChatWithReport(String message, String chatId) {
+    LoveReport loveReport = chatClient
+            .prompt()
+            .system(SYSTEM_PROMPT + "每次对话后都要生成恋爱结果，标题为{用户名}的恋爱报告，内容为建议列表")
+            .user(message)
+            .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
+                    .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+            .call()
+            .entity(LoveReport.class);
+    log.info("loveReport: {}", loveReport);
+    return loveReport;
+}
+```
+
+4）单元测试代码：
+
+```java
+@Test
+void doChatWithReport() {
+    String chatId = UUID.randomUUID().toString();
+    // 第一轮
+    String message = "你好，我是程序员鱼皮，我想让另一半（编程导航）更爱我，但我不知道该怎么做";
+    LoveApp.LoveReport loveReport = loveApp.doChatWithReport(message, chatId);
+    Assertions.assertNotNull(loveReport);
+}
+```
+
+运行程序，通过debug查看效果。
+
+![image-20250610235322273](images/Ai 超级智能体/image-20250610235322273.png)
+
+AI生成的内容如下，是JSON格式文本：
+
+![image-20250610235431538](images/Ai 超级智能体/image-20250610235431538.png)
+
+**最佳实践**
+
+1. 尽量为模型提供清晰的格式指导
+2. 实现输出验证机制和异常处理逻辑，确保结构化数据富恶化预期
+3. 选择支持结构化输出的合适模型
+4. 对于负责数据结构，考虑使用`ParameterizedTypeReference`
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
