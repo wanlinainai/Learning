@@ -1600,19 +1600,76 @@ String fileDir = System.getProperty("user.dir") + "/tmp/chat-memory";
 
 4）运行测试案例，结果如下：![image-20250611012747283](images/Ai 超级智能体/image-20250611012747283.png)
 
+#### PromptTemplate模板
+
+##### 什么是PromptTemplate？有什么用？
+
+`PromptTemplate`是Spring AI 框架中用于构建和管理提示词的核心组件。允许开发者创建带有占位符的文本模板，然后在运行时动态替换这些占位符。
+
+相当于AI交互中的“视图层”，类似于Spring MVC 中的试图模板（JSP）。通过使用PromptTemplate，可以更加结构化、可维护地管理AI应用中的提示词，使其更易于优化和扩展，降低硬编码带来的维护成本。
+
+最基本的功能是支持变量替换，可以在模板中定义占位符，之后在运行时提供这些变量的值：
+
+```java
+// 定义一个带有变量的模板
+String template = "你好，{name}。今天是：{day}，天气：{weather}";
+// 创建模板对象
+PromptTemplate promptTemplate = new PromptTempldate(template);
+
+// 准备变量映射
+Map<String, Object> variables = new HashMap<>();
+variables.put("name", "李白");
+variables.put("day", "周一");
+variables.put("weather", "下雨");
+
+// 生成最终的提示文本
+String prompt = promptTempldate.render(variables);
+```
 
 
 
+**实现原理**
+
+PromptTemplate底层使用了OSS StringTemplate引擎，这是一个强大的模板引擎，专注于文本生成。在Spring AI 中，PromptTemplate类实现了以下接口：
+
+```java
+public class PromptTemplate im⁡plements PromptTempl⁢ateActions, PromptTemplateMessageActions {
+    // 实现细节
+}
+```
 
 
 
+这些接口提供了不同类型的模板操作功能，既能生成普通文本，也能生成结构化消息。
+
+**专用模板类**
+
+1. `SystemPromptTempldate`：用于系统消息，设置AI的行为和背景
+2. `AssistantPromptTempldate`：用于助手消息，用于设置AI回复结构
+3. `FunctionPromptTempldate`：暂时无用
+
+##### 从文件加载模板
+
+PromptTemplate支持从外部文件加载模板内容，很适合管理复杂的提示词，Spring AI 利用Spring的Resource对象从指定路径加载模板文件：
+
+```java
+// 从类路径资源加载系统提示模板
+@Value("classpath:/prompts/system-message.st")
+private Resour⁡ce system⁢Resource;
+
+// 直接使用资源创建模板
+SystemPromptT⁡emplate systemProm⁢ptTemplate = new SystemPromptTemplate(systemResource);
+```
 
 
 
+这种方式可以：
 
+- 将复杂的提示词放在单独的文件中管理
+- 在不修改代码的情况下调整提示词
+- 为不同场景准备多套提示词模板
 
-
-
+更加推荐使用这种方式进行Prompt模板。
 
 
 
