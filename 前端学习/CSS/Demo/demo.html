@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文章展示 - 现代设计</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', 'Microsoft YaHei', sans-serif;
+            background: #0a0a0a;
+            color: #ffffff;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+        }
+
+        .container {
+            position: relative;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            margin-top: 50px;
+            margin-bottom: 50px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            animation: slideInUp 1s ease-out;
+        }
+
+        @keyframes slideInUp {
+            from { opacity: 0; transform: translateY(50px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .article-header {
+            text-align: center;
+            margin-bottom: 40px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 30px;
+            animation: fadeInDown 1.2s ease-out 0.3s both;
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .article-title {
+            font-size: 2.8rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #ff6b6b, #4ecdc4, #45b7d1);
+            background-size: 300% 300%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gradientShift 3s ease-in-out infinite;
+            text-shadow: 0 4px 20px rgba(255, 107, 107, 0.3);
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        .article-meta {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.95rem;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .meta-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 255, 255, 0.1);
+        }
+
+        .meta-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.8;
+            transition: transform 0.3s ease;
+        }
+
+        .meta-item:hover .meta-icon {
+            transform: scale(1.2);
+        }
+
+        .article-content {
+            font-size: 1.1rem;
+            line-height: 1.8;
+            color: rgba(255, 255, 255, 0.9);
+            animation: fadeIn 1.5s ease-out 0.6s both;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .article-content p {
+            margin-bottom: 20px;
+            text-align: justify;
+            position: relative;
+            padding-left: 20px;
+            border-left: 3px solid transparent;
+            transition: all 0.3s ease;
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        .article-content p.visible {
+            opacity: 1;
+            transform: translateY(0);
+            transition: all 0.5s ease;
+        }
+
+        .article-content p:hover {
+            border-left-color: #4ecdc4;
+            padding-left: 25px;
+            background: rgba(78, 205, 196, 0.05);
+            border-radius: 8px;
+            padding: 15px 15px 15px 25px;
+            box-shadow: 0 4px 15px rgba(78, 205, 196, 0.1);
+        }
+
+        .floating-particles {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .particle {
+            position: absolute;
+            background: radial-gradient(circle, #4ecdc4, transparent);
+            border-radius: 50%;
+            animation: float 6s infinite linear;
+            opacity: 0.6;
+        }
+
+        .particle.small { width: 2px; height: 2px; }
+        .particle.medium { width: 4px; height: 4px; }
+        .particle.large { width: 6px; height: 6px; }
+
+        @keyframes float {
+            0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+            10% { opacity: 0.6; }
+            90% { opacity: 0.6; }
+            100% { transform: translateY(-100px) rotate(360deg); opacity: 0; }
+        }
+
+        .scroll-indicator {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4, #45b7d1);
+            transform-origin: left;
+            transform: scaleX(0);
+            transition: transform 0.1s ease;
+            z-index: 1000;
+            box-shadow: 0 0 10px rgba(255, 107, 107, 0.5);
+        }
+
+        .parallax-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .parallax-particle {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: radial-gradient(circle, rgba(255, 107, 107, 0.5), transparent);
+            border-radius: 50%;
+            animation: parallaxFloat 10s infinite ease-in-out;
+        }
+
+        @keyframes parallaxFloat {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-30px) scale(1.2); }
+        }
+
+        @media (max-width: 768px) {
+            .container { margin: 20px 10px; padding: 30px 15px; }
+            .article-title { font-size: 2.2rem; }
+            .article-meta { gap: 15px; }
+            .meta-item { font-size: 0.85rem; padding: 6px 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="scroll-indicator"></div>
+    <div id="canvas-container"></div>
+    <div class="floating-particles"></div>
+    <div class="parallax-layer"></div>
+    
+    <div class="container">
+        <header class="article-header">
+            <h1 class="article-title">人工智能的未来发展趋势</h1>
+            <div class="article-meta">
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                    </svg>
+                    <span>张三</span>
+                </div>
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                    </svg>
+                    <span>科技前沿</span>
+                </div>
+                <div class="meta-item">
+                    <svg class="meta-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zm2.5-9H19V1h-2v1H7V1H5v1H3.5C2.67 2 2 2.67 2 3.5v16c0 .83.67 1.5 1.5 1.5h17c.83 0 1.5-.67 1.5-1.5v-16C22 2.67 21.33 2 20.5 2zM20 19H4V8h16v11z"/>
+                    </svg>
+                    <span>2024年12月15日</span>
+                </div>
+            </div>
+        </header>
+        
+        <article class="article-content">
+            <p>随着科技的飞速发展，人工智能已经成为当今世界最具影响力的技术趋势之一。从机器学习到深度学习，从自然语言处理到计算机视觉，AI技术正在不断突破传统界限，为人类社会带来前所未有的变革。</p>
+            <p>在过去的几年中，我们见证了ChatGPT、GPT-4等大型语言模型的崛起，这些模型展现出了令人惊叹的文本生成和理解能力。同时，图像生成AI如DALL-E、Midjourney也在创意领域掀起了革命性的波澜，让普通用户也能够创作出专业级别的艺术作品。</p>
+            <p>未来，人工智能将在更多领域发挥重要作用。在医疗健康方面，AI将帮助医生进行更精准的诊断和治疗；在教育领域，个性化学习将成为主流；在交通运输中，自动驾驶技术将重塑我们的出行方式；在环境保护方面，AI将协助我们更好地监测和治理环境问题。</p>
+            <p>然而，随着AI技术的快速发展，我们也需要关注其带来的挑战和风险。数据隐私、算法偏见、就业影响等问题都需要我们认真对待和解决。只有在技术发展与伦理道德之间找到平衡，我们才能真正享受到AI带来的福祉。</p>
+            <p>展望未来，人工智能将继续以前所未有的速度发展。通用人工智能(AGI)的实现虽然仍有距离，但相关研究正在稳步推进。我们有理由相信，在不久的将来，AI将成为人类最强大的工具和伙伴，帮助我们解决更多复杂的问题，创造更加美好的未来。</p>
+        </article>
+    </div>
+
+    <script>
+        // Three.js 动态背景 - 进一步优化版
+        let scene, camera, renderer, particleSystem, starSystem, planet, nebula, spaceship;
+        let mouseX = 0, mouseY = 0;
+        let targetRotationX = 0, targetRotationY = 0;
+        
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x0a0a0a, 0.005);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+            
+            // 星空背景
+            const starGeometry = new THREE.SphereGeometry(500, 32, 32);
+            const starTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/starfield.jpg');
+            const starMaterial = new THREE.MeshBasicMaterial({ map: starTexture, side: THREE.BackSide });
+            starSystem = new THREE.Mesh(starGeometry, starMaterial);
+            scene.add(starSystem);
+            
+            // 星云效果
+            const nebulaGeometry = new THREE.PlaneGeometry(200, 200);
+            const nebulaMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4ecdc4,
+                transparent: true,
+                opacity: 0.3,
+                blending: THREE.AdditiveBlending
+            });
+            nebula = new THREE.Mesh(nebulaGeometry, nebulaMaterial);
+            nebula.position.z = -100;
+            scene.add(nebula);
+            
+            // 多样化粒子系统
+            const particleCount = 1000;
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
+            const velocities = new Float32Array(particleCount * 3);
+            const sizes = new Float32Array(particleCount);
+            const types = new Float32Array(particleCount); // 0: 星星, 1: 彗星
+            
+            for (let i = 0; i < particleCount; i++) {
+                positions[i * 3] = (Math.random() - 0.5) * 200;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * 200;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 200;
+                
+                const isComet = Math.random() < 0.1;
+                types[i] = isComet ? 1 : 0;
+                
+                const color = new THREE.Color();
+                color.setHSL(Math.random() * 0.4 + 0.4, 0.8, 0.6);
+                colors[i * 3] = color.r;
+                colors[i * 3 + 1] = color.g;
+                colors[i * 3 + 2] = color.b;
+                
+                velocities[i * 3] = (Math.random() - 0.5) * (isComet ? 0.1 : 0.02);
+                velocities[i * 3 + 1] = (Math.random() - 0.5) * (isComet ? 0.1 : 0.02);
+                velocities[i * 3 + 2] = (Math.random() - 0.5) * (isComet ? 0.1 : 0.02);
+                
+                sizes[i] = isComet ? Math.random() * 3 + 2 : Math.random() * 1.5 + 0.5;
+            }
+            
+            const particleGeometry = new THREE.BufferGeometry();
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            particleGeometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
+            particleGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+            particleGeometry.setAttribute('type', new THREE.BufferAttribute(types, 1));
+            
+            const particleMaterial = new THREE.PointsMaterial({
+                size: 2,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true
+            });
+            
+            particleSystem = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(particleSystem);
+            
+            // 行星
+            const planetGeometry = new THREE.SphereGeometry(5, 32, 32);
+            const planetTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg');
+            const planetMaterial = new THREE.MeshPhongMaterial({ map: planetTexture });
+            planet = new THREE.Mesh(planetGeometry, planetMaterial);
+            planet.position.set(20, 0, -50);
+            scene.add(planet);
+            
+            // 飞船
+            const spaceshipGeometry = new THREE.ConeGeometry(2, 5, 16);
+            const spaceshipMaterial = new THREE.MeshBasicMaterial({ color: 0xff6b6b });
+            spaceship = new THREE.Mesh(spaceshipGeometry, spaceshipMaterial);
+            spaceship.position.set(-30, 0, -70);
+            scene.add(spaceship);
+            
+            // 光源
+            const light1 = new THREE.PointLight(0xffffff, 1, 100);
+            light1.position.set(50, 50, 50);
+            scene.add(light1);
+            
+            const light2 = new THREE.PointLight(0x4ecdc4, 0.5, 150);
+            light2.position.set(-50, -50, -50);
+            scene.add(light2);
+            
+            camera.position.z = 50;
+            
+            animate();
+        }
+        
+        let frameCount = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            frameCount++;
+            
+            if (frameCount % 2 === 0) {
+                const positions = particleSystem.geometry.attributes.position.array;
+                const velocities = particleSystem.geometry.attributes.velocity.array;
+                const types = particleSystem.geometry.attributes.type.array;
+                
+                for (let i = 0; i < positions.length; i += 3) {
+                    positions[i] += velocities[i];
+                    positions[i + 1] += velocities[i + 1];
+                    positions[i + 2] += velocities[i + 2];
+                    
+                    if (Math.abs(positions[i]) > 100) velocities[i] *= -1;
+                    if (Math.abs(positions[i + 1]) > 100) velocities[i + 1] *= -1;
+                    if (Math.abs(positions[i + 2]) > 100) velocities[i + 2] *= -1;
+                }
+                
+                particleSystem.geometry.attributes.position.needsUpdate = true;
+            }
+            
+            targetRotationX += (mouseY - targetRotationX) * 0.05;
+            targetRotationY += (mouseX - targetRotationY) * 0.05;
+            
+            particleSystem.rotation.x = targetRotationX * 0.1 + Math.sin(Date.now() * 0.0005) * 0.02;
+            particleSystem.rotation.y = targetRotationY * 0.1 + Math.cos(Date.now() * 0.0003) * 0.02;
+            
+            nebula.rotation.z += 0.001;
+            nebula.material.color.setHSL(Math.sin(Date.now() * 0.0002) * 0.2 + 0.5, 0.8, 0.5);
+            
+            planet.rotation.y += 0.005;
+            
+            spaceship.position.x += 0.05;
+            spaceship.position.y = Math.sin(Date.now() * 0.001) * 10;
+            if (spaceship.position.x > 50) spaceship.position.x = -50;
+            
+            renderer.render(scene, camera);
+        }
+        
+        // 浮动粒子效果
+        function createFloatingParticles() {
+            const container = document.querySelector('.floating-particles');
+            const sizes = ['small', 'medium', 'large'];
+            
+            setInterval(() => {
+                const particle = document.createElement('div');
+                particle.className = `particle ${sizes[Math.floor(Math.random() * sizes.length)]}`;
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.animationDuration = (Math.random() * 3 + 3) + 's';
+                particle.style.animationDelay = Math.random() * 2 + 's';
+                particle.style.opacity = Math.random() * 0.4 + 0.2;
+                container.appendChild(particle);
+                
+                setTimeout(() => particle.remove(), 8000);
+            }, 150);
+        }
+        
+        // 视差粒子效果
+        function createParallaxParticles() {
+            const container = document.querySelector('.parallax-layer');
+            const particleCount = 30;
+            
+            for (let i = 0; i < particleCount; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'parallax-particle';
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.top = Math.random() * 100 + '%';
+                particle.style.animationDelay = Math.random() * 5 + 's';
+                container.appendChild(particle);
+            }
+        }
+        
+        // 滚动进度指示器
+        function updateScrollIndicator() {
+            const scrolled = window.pageYOffset;
+            const maxHeight = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = scrolled / maxHeight;
+            const indicator = document.querySelector('.scroll-indicator');
+            indicator.style.transform = `scaleX(${progress})`;
+        }
+        
+        // 窗口调整
+        function handleResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // 段落动画
+        function animateParagraphs() {
+            const paragraphs = document.querySelectorAll('.article-content p');
+            paragraphs.forEach((p, index) => {
+                setTimeout(() => p.classList.add('visible'), index * 200);
+            });
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initThreeJS();
+            createFloatingParticles();
+            createParallaxParticles();
+            animateParagraphs();
+            
+            window.addEventListener('scroll', updateScrollIndicator);
+            window.addEventListener('resize', handleResize);
+            
+            let mouseMoveTimeout;
+            document.addEventListener('mousemove', (e) => {
+                clearTimeout(mouseMoveTimeout);
+                mouseMoveTimeout = setTimeout(() => {
+                    mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+                    mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+                }, 16);
+            });
+        });
+    </script>
+</body>
+</html>

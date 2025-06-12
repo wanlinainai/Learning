@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>极简动态简历</title>
+    <style>
+        /* 全局样式 - 参考Evidence 6和19的布局 */
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f4f4f4; /* 淡灰色背景 */
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .resume {
+            width: 21cm; /* A4纸大小 */
+            max-width: 100%;
+            padding: 2cm;
+            background-color: #ffffff; /* 白色容器 */
+            border-radius: 8px; /* 圆角 */
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1); /* 轻微阴影增强深度 */
+            box-sizing: border-box;
+        }
+
+        /* 动态效果1：加载淡入动画 - 基于Evidence 20的@keyframes */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .resume {
+            animation: fadeIn 1.5s ease-in-out; /* 应用淡入动画 */
+        }
+
+        /* 头部样式 */
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #6a0dad; /* 紫色分隔线 */
+            padding-bottom: 15px;
+        }
+        h1 {
+            color: #6a0dad; /* 紫色主色调 */
+            font-size: 2.5em;
+            margin: 0;
+        }
+        .title {
+            color: #888;
+            font-size: 1.2em;
+            margin-top: 5px;
+        }
+
+        /* 动态效果2：标题悬停变色 - 基于Evidence 20的:hover伪类 */
+        h1:hover {
+            color: #007BFF; /* 悬停时变为蓝色 */
+            cursor: pointer;
+            transition: color 0.3s ease; /* 平滑过渡 */
+        }
+
+        /* 内容区块样式 */
+        .section {
+            margin-bottom: 25px;
+        }
+        h2 {
+            color: #444;
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            border-left: 4px solid #6a0dad; /* 紫色左侧边框 */
+            padding-left: 10px;
+        }
+        .info-row {
+            display: flex;
+            margin-bottom: 8px;
+        }
+        .info-label {
+            width: 100px;
+            font-weight: bold;
+            color: #666;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 5px;
+        }
+
+        /* 动态效果3：技能条动画 - 基于Evidence 1的CSS动画 */
+        .skill-bar {
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            height: 10px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        .skill-level {
+            height: 100%;
+            background-color: #6a0dad;
+            width: 0; /* 初始宽度为0 */
+            animation: expandBar 2s forwards; /* 加载时展开 */
+        }
+        @keyframes expandBar {
+            from { width: 0; }
+            to { width: var(--skill-width); } /* 动态宽度 */
+        }
+    </style>
+</head>
+<body>
+    <div class="resume">
+        <!-- 头部：个人信息 -->
+        <header>
+            <h1>张三</h1>
+            <p class="title">前端开发工程师</p>
+        </header>
+
+        <!-- 联系方式 -->
+        <section class="section contact">
+            <h2>联系方式</h2>
+            <div class="info-row">
+                <span class="info-label">邮箱：</span>
+                <span>zhangsan@example.com</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">电话：</span>
+                <span>138-0013-8000</span>
+            </div>
+        </section>
+
+        <!-- 工作经历 -->
+        <section class="section experience">
+            <h2>工作经历</h2>
+            <div class="info-row">
+                <span class="info-label">2020-2023：</span>
+                <span>ABC科技有限公司，前端开发</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">2018-2020：</span>
+                <span>XYZ设计工作室，UI设计师</span>
+            </div>
+        </section>
+
+        <!-- 技能 -->
+        <section class="section skills">
+            <h2>技能</h2>
+            <ul>
+                <li>HTML/CSS 
+                    <div class="skill-bar">
+                        <div class="skill-level" style="--skill-width: 90%;"></div> <!-- 动态宽度 -->
+                    </div>
+                </li>
+                <li>JavaScript 
+                    <div class="skill-bar">
+                        <div class="skill-level" style="--skill-width: 80%;"></div>
+                    </div>
+                </li>
+                <li>响应式设计 
+                    <div class="skill-bar">
+                        <div class="skill-level" style="--skill-width: 85%;"></div>
+                    </div>
+                </li>
+            </ul>
+        </section>
+    </div>
+</body>
+</html>

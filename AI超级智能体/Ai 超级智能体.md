@@ -1791,7 +1791,182 @@ Rank模型（排序模型）负责对召回阶段筛选出的候选集进行精�
 
 比如在AI大模型开发平台Dify中，就为用户提供了“基于全文检索的关键词搜索 + 基于向量检索的语义检索”的混合检索策略，用户还可以自己设置不同的检索方式的权重。
 
+#### RAG实战：Spring AI + 本地知识库
 
+Spring AI 为我们实现了RAG 提供了全流程的支持，参考[Spring AI](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html)和[Spring AI Alibaba](https://java2ai.com/docs/1.0.0-M6.1/tutorials/rag/)的官方文档。
+
+我们在学习中的标准RAG开发相较于真实业务有所简化，来实现基于本地知识库的AI 恋爱知识问答
+
+##### 文档准备
+
+![image-20250612135335685](Ai 超级智能体/image-20250612135335685.png)
+
+##### 文档读取
+
+首先，要对已经准备好的知识库文档进行处理，之后保存到向量数据库中，这个过程就是ETL（抽取、转换、加载），Spring AI 提供了对ETL的支持，参考[官方文档](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_markdown)
+
+ETL三大核心组件：按照顺序依次执行：
+
+- `DocumentReader`：读取文档，得到文档列表
+- `DocumentTransformer`：转换文档，得到处理后的文档列表
+- `DocumentWriter`：将文档列表保存到存储中（可以是向量数据库，也可以是其他存储）
+
+![image-20250612140156026](Ai 超级智能体/image-20250612140156026.png)
+
+1）引入依赖
+
+```xml
+<!--        Spring AI markdown 文档读取-->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-markdown-document-reader</artifactId>
+            <version>1.0.0-M6</version>
+        </dependency>
+```
+
+Spring AI 提供了很多DocumentReaders，用于加载不同类型的文件。
+
+![image-20250612151707990](Ai 超级智能体/image-20250612151707990.png)
+
+我们使用`MarkdownDocumentReader`来读取Markdown文档，需要先引入依赖，可以在maven中找到.
+
+2）在根目录下新建`rag`包，编写文档加载器类`LoveAppDocumentLoader`负责读取所有Markdown文档并转成Document列表。
+
+```java
+@Component
+@Slf4j
+public class LoveAppDocumentLoader {
+    private final ResourcePatternResolver resourcePatternResolver;
+
+    public LoveAppDocumentLoader(ResourcePatternResolver resourcePatternResolver) {
+        this.resourcePatternResolver = resourcePatternResolver;
+    }
+
+    /**
+     * 加载Markdown文件
+     */
+    public List<Document> loadMarkdowns() {
+        List<Document> allDocuments = new ArrayList<>();
+        try {
+            Resource[] resources = resourcePatternResolver.getResources("classpath:document/*.md");
+            for (Resource resource : resources) {
+                String filename = resource.getFilename();
+                MarkdownDocumentReaderConfig config = MarkdownDocumentReaderConfig.builder().withHorizontalRuleCreateDocument(true)
+                        .withIncludeCodeBlock(false)
+                        .withIncludeBlockquote(false)
+                        .withAdditionalMetadata("filename", filename)
+                        .build();
+                MarkdownDocumentReader reader = new MarkdownDocumentReader(resource, config);
+                allDocuments.addAll(reader.get());
+            }
+
+        } catch(IOException e) {
+            log.error("加载Markdown文件失败", e);
+        }
+        return allDocuments;
+    }
+}
+```
+
+上述代码中，我们通过MarkdownDocumentReaderConfig文档加载配置来指定读取文档的细节，比如是否读取代码块、引用快等。我们还指定了额外的元信息配置，提取文档的文件名（fileName）作为文档的元信息，可以便于后续知识库实现更精确的检索。
+
+##### 向量转换和存储
+
+为了方便，使用基于内存读写的向量数据库`SimpleVectorStore`来保存文档。
+
+`SimpleVectorStore`实现了`Vector`接口，而`Vector`接口集成了`DocumentWriter`，所以具备文档写入功能。
+
+![image-20250612153637586](Ai 超级智能体/image-20250612153637586.png)
+
+简单了解一下源码，在将文档写入到数据库之前，会先调用`Embeding`将文档转成向量，实际存储到数据库的是向量类型的数据。
+
+在`rag`包新建`LoveAppVectorStoreConfig`类，实现初始化向量数据库并且保存文档的方法。代码：
+
+```java
+@Configuration
+public class LoveAppVectorStoreConfig {
+    @Resource
+    private LoveAppDocumentLoader loveAppDocumentLoader;
+
+    @Bean
+    VectorStore loveAppVectorStore(EmbeddingModel dashscopeEmbeddingModel) {
+        SimpleVectorStore simpleVectorStore = SimpleVectorStore.builder(dashscopeEmbeddingModel).build();
+        // 加载文档
+        List<Document> documents = loveAppDocumentLoader.loadMarkdowns();
+        simpleVectorStore.add(documents);
+        return simpleVectorStore;
+    }
+}
+```
+
+##### 查询增强
+
+通过`Advisor`特性提供了开箱即用的RAG功能。主要是`QuestionAnswerAdvisor`问答拦截器和`RetrivalAugmentationAdvisor`检索增强拦截器，前者更加简单易用、后者更加强大。
+
+查询增强的原理很简单，向量数据库存储着AI模型本身不知道的数据，当用户向AI发送提问时，QuestionAnswerAdvisor会查询向量数据库，获取与用户问题相关的文档。然后从向量数据库返回的响应会被附加到用户文本中，为AI模型提供上下文，帮助生成回答。
+
+根据官方文档，需要先引入依赖：
+
+```xml
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-advisors-vector-store</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+```
+
+我们选择`QuestionAnswerAdvisor`问答拦截器，在`LoveApp`中新增和RAG知识库进行对话的方法。
+
+```java
+@Resource
+    private VectorStore loveAppVectorStore;
+    public String doChatWithRAG(String message, String chatId) {
+        ChatResponse chatResponse = chatClient.prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
+                        .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                .advisors(new MyLoggerAdvisor())
+                .advisors(new QuestionAnswerAdvisor(loveAppVectorStore))
+                .call()
+                .chatResponse();
+
+        String content = chatResponse.getResult().getOutput().getText();
+        log.info("content: {}", content);
+        return content;
+    }
+```
+
+##### 测试
+
+生成单元测试代码：
+
+```java
+    @Test
+    void doChatWithRAG() {
+        String chatId = UUID.randomUUID().toString();
+        String message = "我已经结婚了，但是婚后关系不太稳定，怎么做？";
+        String answer = loveApp.doChatWithRAG(message, chatId);
+        Assertions.assertNotNull(answer);
+    }
+```
+
+运行程序，通过debug发现，加载的文档被自动按照小标题划分，并且补充了metadata元信息：
+
+![image-20250612154658019](Ai 超级智能体/image-20250612154658019.png)
+
+放行，查看请求，发现检索用户问题得到了4个文档切片，每个切片都有对应的分数和元信息。
+
+![image-20250612154847724](Ai 超级智能体/image-20250612154847724.png)
+
+![image-20250612154906981](Ai 超级智能体/image-20250612154906981.png)
+
+查看请求，发现用户提示词被修改了，
+
+![image-20250612154932246](Ai 超级智能体/image-20250612154932246.png)
+
+放行，查看响应结果，AI的回复成功包含了知识库的内容
+
+![image-20250612155041124](Ai 超级智能体/image-20250612155041124.png)
 
 
 

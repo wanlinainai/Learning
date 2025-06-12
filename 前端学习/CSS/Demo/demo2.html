@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中医智慧 - 文章展示</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Noto Serif SC', 'Source Han Serif SC', serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4efe9 100%);
+            color: #333;
+            line-height: 1.6;
+            overflow-x: hidden;
+            min-height: 100vh;
+            position: relative;
+        }
+        
+        #particle-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.5;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 60px 20px;
+            position: relative;
+            z-index: 10;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            padding: 20px;
+            position: relative;
+        }
+        
+        .title-container {
+            display: inline-block;
+            position: relative;
+        }
+        
+        .title-container::before, .title-container::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            width: 100px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #c8a97e, transparent);
+        }
+        
+        .title-container::before {
+            right: 100%;
+            margin-right: 20px;
+        }
+        
+        .title-container::after {
+            left: 100%;
+            margin-left: 20px;
+        }
+        
+        h1 {
+            font-size: 3.2rem;
+            color: #2c5f2d;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+            letter-spacing: 3px;
+            margin-bottom: 10px;
+            font-weight: 600;
+            animation: fadeInBlur 2s ease-out, colorShift 5s infinite alternate;
+        }
+        
+        @keyframes fadeInBlur {
+            from {
+                opacity: 0;
+                filter: blur(10px);
+            }
+            to {
+                opacity: 1;
+                filter: blur(0);
+            }
+        }
+        
+        @keyframes colorShift {
+            0% { color: #2c5f2d; }
+            50% { color: #4caf50; }
+            100% { color: #2c5f2d; }
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            color: #8c7b6b;
+            letter-spacing: 5px;
+            font-weight: 300;
+            animation: fadeInUp 1s ease-out, textGlow 3s infinite alternate;
+        }
+        
+        @keyframes textGlow {
+            0% { text-shadow: 0 0 5px rgba(200, 169, 126, 0.5); }
+            100% { text-shadow: 0 0 15px rgba(200, 169, 126, 1); }
+        }
+        
+        .article-card {
+            background: rgba(255, 255, 255, 0.92);
+            border-radius: 15px;
+            box-shadow: 0 15px 35px rgba(50, 50, 93, 0.1), 0 5px 15px rgba(0, 0, 0, 0.07);
+            padding: 50px;
+            transform: translateY(0);
+            transition: all 0.5s ease;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(200, 169, 126, 0.2);
+        }
+        
+        .article-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 18px 40px rgba(50, 50, 93, 0.15), 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .article-header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(200, 169, 126, 0.3);
+            position: relative;
+        }
+        
+        .article-header::after {
+            content: "";
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100px;
+            height: 3px;
+            background: linear-gradient(90deg, #c8a97e, #2c5f2d);
+            border-radius: 3px;
+        }
+        
+        .article-title {
+            font-size: 2.5rem;
+            color: #2c5f2d;
+            margin-bottom: 15px;
+            line-height: 1.3;
+            font-weight: 600;
+            animation: rotateIn 1s ease-out, shadowPulse 3s infinite;
+        }
+        
+        @keyframes rotateIn {
+            from {
+                transform: rotateY(90deg);
+                opacity: 0;
+            }
+            to {
+                transform: rotateY(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes shadowPulse {
+            0% { text-shadow: 0 0 5px rgba(44, 95, 45, 0.5); }
+            50% { text-shadow: 0 0 15px rgba(44, 95, 45, 1); }
+            100% { text-shadow: 0 0 5px rgba(44, 95, 45, 0.5); }
+        }
+        
+        .article-meta {
+            display: flex;
+            flex-wrap: wrap;
+            color: #8c7b6b;
+            font-size: 1rem;
+            gap: 20px;
+        }
+        
+        .article-meta div {
+            display: flex;
+            align-items: center;
+        }
+        
+        .article-meta i {
+            margin-right: 8px;
+            color: #c8a97e;
+        }
+        
+        .article-content {
+            font-size: 1.15rem;
+            color: #444;
+            text-align: justify;
+        }
+        
+        .article-content p {
+            margin-bottom: 25px;
+            position: relative;
+            padding-left: 20px;
+            animation: wave 2s infinite ease-in-out, typeWriter 3s steps(40) forwards;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        
+        @keyframes wave {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+        }
+        
+        @keyframes typeWriter {
+            from { width: 0; }
+            to { width: 100%; }
+        }
+        
+        .article-content p::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 10px;
+            width: 8px;
+            height: 8px;
+            background: #c8a97e;
+            border-radius: 50%;
+        }
+        
+        .article-content h3 {
+            color: #2c5f2d;
+            margin: 35px 0 15px;
+            font-size: 1.6rem;
+            position: relative;
+            padding-bottom: 10px;
+            animation: scaleIn 0.5s ease-out, colorShift 5s infinite alternate;
+        }
+        
+        @keyframes scaleIn {
+            from {
+                transform: scale(0.5);
+                opacity: 0;
+            }
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+        
+        .article-content h3::after {
+            content: "";
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 60px;
+            height: 2px;
+            background: linear-gradient(90deg, #c8a97e, transparent);
+        }
+        
+        .herb-decoration {
+            position: absolute;
+            opacity: 0.1;
+            z-index: -1;
+            pointer-events: none;
+        }
+        
+        .herb-1 {
+            top: 10%;
+            right: 5%;
+            width: 200px;
+            height: 200px;
+            background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50,15 Q70,10 75,30 Q80,50 65,65 Q50,80 30,75 Q10,70 15,50 Q20,30 35,20 Z" fill="none" stroke="%232c5f2d" stroke-width="2"/></svg>') no-repeat;
+        }
+        
+        .herb-2 {
+            bottom: 15%;
+            left: 5%;
+            width: 150px;
+            height: 150px;
+            background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50,20 Q70,40 60,60 Q50,80 30,70 Q10,60 25,40 Q40,20 50,20 Z" fill="none" stroke="%23c8a97e" stroke-width="2"/></svg>') no-repeat;
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            color: #8c7b6b;
+            font-size: 0.9rem;
+            padding: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 30px 15px;
+            }
+            
+            h1 {
+                font-size: 2.5rem;
+            }
+            
+            .article-card {
+                padding: 30px 20px;
+            }
+            
+            .article-title {
+                font-size: 2rem;
+            }
+            
+            .title-container::before, 
+            .title-container::after {
+                width: 50px;
+            }
+        }
+        
+        /* 动画效果 */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .animate {
+            animation: fadeInUp 0.8s ease-out forwards;
+        }
+        
+        .delay-1 {
+            animation-delay: 0.2s;
+        }
+        
+        .delay-2 {
+            animation-delay: 0.4s;
+        }
+        
+        .delay-3 {
+            animation-delay: 0.6s;
+        }
+        
+        .yin-yang {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(90deg, #2c5f2d 50%, #f5f7fa 50%);
+            border-radius: 50%;
+            position: relative;
+            margin: 30px auto;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+            animation: rotate 10s linear infinite;
+        }
+        
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .yin-yang::before, .yin-yang::after {
+            content: "";
+            position: absolute;
+            border-radius: 50%;
+        }
+        
+        .yin-yang::before {
+            width: 40px;
+            height: 40px;
+            background: #f5f7fa;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: 0 20px 0 #2c5f2d;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="particle-canvas"></canvas>
+    <div class="herb-decoration herb-1"></div>
+    <div class="herb-decoration herb-2"></div>
+    
+    <div class="container">
+        <header>
+            <h1 class="animate">中医智慧</h1>
+            <div class="subtitle animate delay-1">TRADITIONAL CHINESE MEDICINE</div>
+            <div class="yin-yang animate delay-2"></div>
+        </header>
+        
+        <main>
+            <article class="article-card animate delay-3">
+                <div class="article-header">
+                    <h2 class="article-title">《黄帝内经》中的养生之道与四季调摄</h2>
+                    <div class="article-meta">
+                        <div><i>作者</i> 张仲景</div>
+                        <div><i>来源</i> 中医典籍研究院</div>
+                        <div><i>时间</i> 2023年10月15日</div>
+                    </div>
+                </div>
+                
+                <div class="article-content">
+                    <p>《黄帝内经》作为中医理论的奠基之作，蕴含了丰富的养生智慧。其核心思想强调"天人相应"，认为人体健康与自然界的变化息息相关。书中提出："上古之人，其知道者，法于阴阳，和于术数，食饮有节，起居有常，不妄作劳，故能形与神俱，而尽终其天年，度百岁乃去。"</p>
+                    
+                    <h3>四季养生要旨</h3>
+                    <p>春季属木，对应肝脏。《素问》曰："春三月，此谓发陈，天地俱生，万物以荣。"此时应夜卧早起，广步于庭，保持情志舒畅，以顺应春生之气。饮食宜选辛甘发散之物，如韭菜、春笋等，避免酸涩收敛之品。</p>
+                    
+                    <p>夏季属火，对应心脏。养生要"使志无怒，使华英成秀"。宜晚睡早起，适当午憩，避免暴晒。饮食以清淡为主，可食苦瓜、绿豆等清热解暑之物，但需注意保护脾胃阳气，切忌过度贪凉。</p>
+                    
+                    <h3>阴阳平衡之道</h3>
+                    <p>《内经》提出："阴平阳秘，精神乃治。"养生关键在于维持阴阳动态平衡。白天属阳，宜动；夜晚属阴，宜静。劳逸结合，动静相宜。如书中所言："久视伤血，久卧伤气，久坐伤肉，久立伤骨，久行伤筋。"</p>
+                    
+                    <p>现代研究证实，遵循《内经》养生原则的人群，其免疫功能、抗氧化能力明显优于常人。中医的四季养生观不仅是一种健康理念，更是中华文明"道法自然"哲学思想的体现。</p>
+                    
+                    <h3>情志调摄</h3>
+                    <p>"怒伤肝，喜伤心，思伤脾，忧伤肺，恐伤肾。"《内经》最早系统论述了情志致病理论。保持平和心态，避免情绪剧烈波动是养生要诀。书中提倡"恬淡虚无，真气从之"，即通过静坐、冥想等方法达到精神内守的状态。</p>
+                    
+                    <p>在快节奏的现代社会，我们更应借鉴古人智慧，顺应自然规律，调节生活节奏，实现身心健康和谐的统一。中医养生之道，不仅是治病之法，更是生命哲学，值得当代人深入研习与实践。</p>
+                </div>
+            </article>
+        </main>
+        
+        <footer>
+            <p>© 2023 中医文化传承中心 | 探索千年智慧，守护当代健康</p>
+        </footer>
+    </div>
+
+    <script>
+        // 粒子背景动画
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化Three.js场景
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({
+                canvas: document.getElementById('particle-canvas'),
+                alpha: true
+            });
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            
+            // 创建粒子
+            const particlesGeometry = new THREE.BufferGeometry();
+            const particlesCount = 1500;
+            const posArray = new Float32Array(particlesCount * 3);
+            const colorArray = new Float32Array(particlesCount * 3);
+            
+            // 中医主题颜色
+            const colors = [
+                new THREE.Color(0x2c5f2d), // 深绿色
+                new THREE.Color(0x4caf50), // 绿色
+                new THREE.Color(0xc8a97e), // 浅棕色
+                new THREE.Color(0x8c7b6b)  // 深棕色
+            ];
+            
+            for(let i = 0; i < particlesCount * 3; i += 3) {
+                // 位置
+                posArray[i] = (Math.random() - 0.5) * 50;
+                posArray[i+1] = (Math.random() - 0.5) * 50;
+                posArray[i+2] = (Math.random() - 0.5) * 50;
+                
+                // 颜色
+                const color = colors[Math.floor(Math.random() * colors.length)];
+                colorArray[i] = color.r;
+                colorArray[i+1] = color.g;
+                colorArray[i+2] = color.b;
+            }
+            
+            particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+            
+            // 粒子材质
+            const particlesMaterial = new THREE.PointsMaterial({
+                size: 0.1,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+            scene.add(particlesMesh);
+            
+            camera.position.z = 5;
+            
+            // 添加动画
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                // 粒子动画
+                const positions = particlesGeometry.attributes.position.array;
+                for(let i = 0; i < particlesCount * 3; i += 3) {
+                    positions[i+1] += 0.01;
+                    if(positions[i+1] > 25) positions[i+1] = -25;
+                    
+                    // 轻微水平摆动
+                    positions[i] += Math.sin(Date.now() * 0.001 + i) * 0.002;
+                }
+                particlesGeometry.attributes.position.needsUpdate = true;
+                
+                // 旋转
+                particlesMesh.rotation.x += 0.0005;
+                particlesMesh.rotation.y += 0.001;
+                
+                renderer.render(scene, camera);
+            }
+            
+            // 窗口大小调整
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            
+            animate();
+            
+            // 滚动动画
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('animate');
+                    }
+                });
+            }, { threshold: 0.1 });
+            
+            document.querySelectorAll('.article-card, .article-title, .article-content p, .article-content h3').forEach(el => {
+                observer.observe(el);
+            });
+        });
+    </script>
+</body>
+</html>
