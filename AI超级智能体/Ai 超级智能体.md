@@ -1972,23 +1972,299 @@ public class LoveAppVectorStoreConfig {
 
 
 
+## RAG芝士进阶
+
+### RAG核心特性
+
+#### 文档收集和切割 - ETL
+
+文档收集和切割阶段，我们要对自己准备的知识库知识文档进行处理，然后保存到向量数据库中。这个过程叫做ETL（抽取、转换、加载），Spring AI 提供了对ETL的支持，参考：[官方文档](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html)。
+
+##### 文档
+
+什么是Spring AI的文档？文档不仅仅是包含文本，还可以包含一系列元信息和多媒体附件：
+
+![image-20250613000750386](images/Ai 超级智能体/image-20250613000750386.png)
+
+##### ETL
+
+在Spring AI中，对Document的处理通常遵循以下流程：
+
+1. 读取文档：使用`DocumentReader`组件从数据源（如本地文件、网络资源、数据库等）加载文档。
+2. 转换文档：根据需求将文档转换成适合后续处理的格式，比如去除冗余信息、分词、词性标注等，可以使用DocumentTransform组件实现。
+3. 写入文档：使用DocumentWriter将文档以特定格式保存到存储中，比如存储到向量数据库中，或者以键值对形式保存到KV存储结构中。
+
+![image-20250613001142035](images/Ai 超级智能体/image-20250613001142035.png)
+
+我们利用Spring AI实现ETL，核心就是学习DocumentReader、DocumentTransformer、DocumentWriter三大组件。
+
+##### 抽取（Extract）
+
+Spring AI通过DocumentReader组件实现了文档抽取，也就是将文档加载到内存中。
+
+DocumentReader实现了`Supplier<List<Document>>`接口，主要负责从各种数据源读取数据并转换为Document对象集合。
+
+```java
+	public interface DocumentReader extends Supplier<List<Document>> {
+
+	default List<Document> read() {
+		return get();
+	}
+
+}
+```
+
+实际开发中，我们可以直接使用Spring AI 内置的多种[DocumentReader 实现类](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_documentreaders)，处理不同类型的数据源。
+
+以JsonReader为例，支持JSON Pointer特征，能够快速指定从JSON文档中提取那一些字段和内容：
+
+```java
+// 从 classpath 下的 JSON 文件中读取文档
+ @Component
+ class MyJsonReader {
+     private final Resource resource;
+
+     MyJsonReader(@Value("classpath:products.json") Resource resource) {
+         this.resource = resource;
+     }
+
+     // 基本用法
+     List<Document> loadBasicJsonDocuments() {
+         JsonReader jsonReader = new JsonReader(this.resource);
+         return jsonReader.get();
+     }
+
+     // 指定使用哪些 JSON 字段作为文档内容
+     List<Document> loadJsonWithSpecificFields() {
+         JsonReader jsonReader = new JsonReader(this.resource, "description", "features");
+         return jsonReader.get();
+     }
+
+     // 使用 JSON 指针精确提取文档内容
+     List<Document> loadJsonWithPointer() {
+         JsonReader jsonReader = new JsonReader(this.resource);
+         return jsonReader.get("/items"); // 提取 items 数组内的内容
+     }
+ }
+
+```
 
 
 
 
 
+此外，Spring AI Alibaba官方社区提供了[更多的文档读取器](https://java2ai.com/docs/1.0.0-M6.1/integrations/documentreader/)，比如加载飞书文档、提取B站视频信息和字幕、加载邮件、加载Github官方文档、加载数据库等。
+
+##### 转换
+
+Spring AI 通过 DocumentTransform组件实现文档转换。
 
 
 
+看下源码，DocumentTransform接口实现了`Function<List<Document>, List<Document>>`接口，负责将一组Document转成另一组Document。
+
+```java
+public interface DocumentTransformer extends Function<List<Document>, List<Document>> {
+
+	default List<Document> transform(List<Document> transform) {
+		return apply(transform);
+	}
+
+}
+```
+
+文档转换是保证RAG效果的核心步骤，就是如何将大文档合理拆分成便于检索的知识碎片，Spring AI 提供了多种DocumentTransform实现类，可以简单划分成3类：
+
+###### 1）TextSplitter文本分割器
+
+`TextSplitter`是文本分割器的基类，提供了分割单词的流程方法：
+
+![image-20250613004353471](images/Ai 超级智能体/image-20250613004353471.png)
+
+TokenTextSplitter是其实现类，基于Token的文本分割器。考虑了语义边界（语句结尾）来创建有意义的文本段落，是成本较低的文本切割方式。
+
+```java
+@Component
+class MyTokenTextSplitter {
+
+    public List<Document> splitDocuments(List<Document> documents) {
+        TokenTextSplitter splitter = new TokenTextSplitter();
+        return splitter.apply(documents);
+    }
+
+    public List<Document> splitCustomized(List<Document> documents) {
+        TokenTextSplitter splitter = new TokenTextSplitter(1000, 400, 10, 5000, true);
+        return splitter.apply(documents);
+    }
+}
+
+```
+
+TokenTextSplliter提供了两种构造函数：
+
+1. `TokenTextSplitter()`：使用默认设置创建分割器。
+2. `TokenTextSplitter(int defaultChunkSize, int minChunkSizeChars, int minChunkLengthToEnbed, int maxNumChunks, boolean keepSeparator)`：使用自定义参数创建分割器，通过调整参数，可以控制分割的粒度和方法，适应不同的应用场景。
+
+官方文档中对Token分词器工作原理的详细解释，可以简单了解一下：
+
+1. 使用CL 100K_BASE编码将输入文本编码为Token
+2. 根据defaultChunkSize将编码后的文本分割成块
+3. 对于每个块：
+
+- 将块解码回文本
+- 尝试在minChunkSizeChars之后找到合适的断点（句号、问号、感叹号或换行符）
+- 如果找到断点，在该点截断块
+- 修剪块并根据keepSeparator设置选择性地删除换行符
+- 如果生成的块长度大于minChunkLenthToEmbed，将其添加到输出中
+
+4. 会一直持续到所有Token都被处理完或达到maxNumChunks为止。
+4. 剩余文本长度大于minChunkLengthToEmbed，作为最后一个块添加
+
+###### 2）MetaDataEnricher元数据增强器
+
+元数据增强器是为文档补充更多元信息，便于后续检索，不是为了改变文档本身的切分规则。
+
+- KeywordMetadataEnricher：使用AI提取关键词并添加到元数据
+- SummaryMetadataEnricher：使用AI生成文档摘要并添加到元数据。不仅可以为当前文档生成摘要，还能关联前一个和后一个相邻的文档，摘要更加完整。
+
+实例代码：
+
+```java
+@Component
+class MyDocumentEnricher {
+
+    private final ChatModel chatModel;
+
+    MyDocumentEnricher(ChatModel chatModel) {
+        this.chatModel = chatModel;
+    }
+      
+      // 关键词元信息增强器
+    List<Document> enrichDocumentsByKeyword(List<Document> documents) {
+        KeywordMetadataEnricher enricher = new KeywordMetadataEnricher(this.chatModel, 5);
+        return enricher.apply(documents);
+    }
+  
+    // 摘要元信息增强器
+    List<Document> enrichDocumentsBySummary(List<Document> documents) {
+        SummaryMetadataEnricher enricher = new SummaryMetadataEnricher(chatModel, 
+            List.of(SummaryType.PREVIOUS, SummaryType.CURRENT, SummaryType.NEXT));
+        return enricher.apply(documents);
+    }
+}
+
+```
 
 
 
+###### 3）ContentFormatter内容格式化工具
+
+用于统一文档内容格式。官方对这个介绍很少。
+
+直接去看源码：`DefaultContentFormatter`
+
+![image-20250613010231131](images/Ai 超级智能体/image-20250613010231131.png)
+
+主要提供了三种功能：
+
+1. 文档格式化：将文档内容与元数据合并成特定格式的字符串，便于后续处理
+2. 元数据过滤：根据不同的元数据模式（MetadataMode）筛选需要保留的元数据项
+   1. `ALL`：保留所有元数据
+   2. `NONE`：移除所有元数据
+   3. `INFRENCE`：推理场景，排除指定的推理元数据
+   4. `ENBED`：用于嵌入场景，排除指定的嵌入元数据
+3. 自定义模板：支持自定义以下格式：
+   1. 元数据模板
+   2. 元数据分隔符
+   3. 文本模板
+
+```java
+        // Builder创建实例
+        DefaultContentFormatter formatter = DefaultContentFormatter.builder()
+                .withMetadataSeparator("\n")
+                .withMetadataTemplate("{key}：{value}")
+                .withTextTemplate("{metadata_string}\n\n{content}")
+                .withExcludedInferenceMetadataKeys("embedding", "vector_id")
+                .withExcludedEmbedMetadataKeys("source_url", "timestamp")
+                .build();
+
+        // 使用格式化器处理文档
+        formatter.format(document, MetadataMode.INFERENCE);
+```
 
 
 
+###### 加载（Load）
 
+Spring AI 通过DocumentWriter组件实现文档加载
 
+`DocumentWriter`接口实现了`Consumer<List<Document>>`接口，负责将处理之后的文档写入目标存储中：
 
+```java
+public interface DocumentWriter extends Consumer<List<Document>> {
+    default void write(List<Document> documents) {
+        accept(documents);
+    }
+}
+```
+
+Spring AI 提供了两种内置的Writer实现类：
+
+1）`FileDocumentWriter`：将文档写入到文件系统
+
+```java
+@Component
+class MyDocumentWriter {
+    public void writeDocuments(List<Document> documents) {
+        FileDocumentWriter writer = new FileDocumentWriter("output.txt", true, MetadataMode.ALL, false);
+        writer.accept(documents);
+    }
+}
+```
+
+2）`VectorStoreWriter`：将文档写入到向量数据库中
+
+```java
+@Component
+class MyVectorStoreWriter {
+    private final VectorStore vectorStore;
+    
+    MyVectorStoreWriter(VectorStore vectorStore) {
+        this.vectorStore = vectorStore;
+    }
+    
+    public void storeDocuments(List<Document> documents) {
+        vectorStore.accept(documents);
+    }
+}
+```
+
+当然，也可以同时将文档写入多个存储，只需要创建多个Writer或者自定义Writer即可
+
+###### ETL流程示例
+
+将上述的三大组件组合起来，可以实现完整的ETL流程：
+
+```java
+// 抽取：从 PDF 文件读取文档
+PDFReader pdfReader = new PagePdfDocumentReader("knowledge_base.pdf");
+List<Document> documents = pdfReader.read();
+
+// 转换：分割文本并添加摘要
+TokenTextSplitter splitter = new TokenTextSplitter(500, 50);
+List<Document> splitDocuments = splitter.apply(documents);
+
+SummaryMetadataEnricher enricher = new SummaryMetadataEnricher(chatModel, 
+    List.of(SummaryType.CURRENT));
+List<Document> enrichedDocuments = enricher.apply(splitDocuments);
+
+// 加载：写入向量数据库
+vectorStore.write(enrichedDocuments);
+
+// 或者使用链式调用
+vectorStore.write(enricher.apply(splitter.apply(pdfReader.read())));
+
+```
 
 
 
