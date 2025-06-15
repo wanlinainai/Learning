@@ -2266,23 +2266,271 @@ vectorStore.write(enricher.apply(splitter.apply(pdfReader.read())));
 
 ```
 
+通过这种方式，可以完成从原始文档到向量数据库的整个ETL 过程，为后续的检索增强生成了提供的基础。
+
+#### 向量转换和存储
+
+向量存储是RAG应用中的核心组件，它将文档转换成向量（嵌入）并存储起来，以便于后续进行高效的相似性搜索。Spring AI 官方提供了向量数据库接口`VectorStore`和向量存储整合包，帮助开发者快速集成各种第三方向量存储，比如Milvus、Redis、PGVector、ES等。
+
+##### VectorStore接口介绍
+
+VectorStore是Spring AI 中用于与向量数据库交互的核心接口，它继承自DocumentWriter，主要提供以下功能：
+
+```java
+public interface VectorStore extends DocumentWriter {
+
+    default String getName() {
+        return this.getClass().getSimpleName();
+    }
+
+    void add(List<Document> documents);
+
+    void delete(List<String> idList);
+
+    void delete(Filter.Expression filterExpression);
+
+    default void delete(String filterExpression) { ... };
+
+    List<Document> similaritySearch(String query);
+
+    List<Document> similaritySearch(SearchRequest request);
+
+    default <T> Optional<T> getNativeClient() {
+        return Optional.empty();
+    }
+}
+```
+
+这个接口定义了向量存储的基本操作，简单来说就是“增删改查”
+
+- 添加文档到向量数据库
+- 从向量数据库删除文档
+- 基于查询进行相似度计算
+- 获取原生客户端（用于特定实现的高级操作）
+
+##### 搜索请求构建
+
+Spring AI 提供了searchRequest类，用于构建相似度搜索请求：
+
+```java
+SearchRequest request = SearchRequest.builder()
+					.query("什么是朝花夕拾")
+  .topK(5)
+  .similarityThreshold(0.7)
+  .filterExpression("catgory == 'web' AND date > '2025-05-13'")
+  .build();
+
+List<Document> results = vectorStore.similaritySearch(request);
+```
 
 
 
+有点类似于java的mybatis和mybatis-plus。SearchRequest提供了多种查询配置：
+
+- query：搜索的查询文本
+- topK：返回的最大结果数，默认是4
+- similarityThreshold：相似度阈值，低于此值的结果会被过滤掉
+- filterExpression：基于文档元数据的过滤表达式，语法有点类似于SQL语句，需要用到时查询[官方文档](https://docs.spring.io/spring-ai/reference/api/vectordbs.html#metadata-filters)
+
+##### 向量存储的工作原理
+
+在向量数据库中，查询与传统的关系型数据库有所不同。向量数据库执行的是相似性搜索，而非精确匹配，具体流程上一节说过。
+
+1. 嵌入转换：当文档被添加到向量存储中，Spring AI 会使用嵌入模型（如OpenAI 的text-enbedding-ada-002）将文本转换成向量
+2. 相似度计算：查询时，查询文本同样被转成向量，然后系统计算此向量与存储中所有向量的相似度
+3. 相似度度量：常用的相似度计算方法包括：
+   1. 余弦相似度：计算两个向量的夹角余弦值，范围在1到-1之间
+   2. 欧氏距离：计算两个向量的直线距离
+   3. 点积：两个向量的点积值
+4. 过滤与排序：根据相似度过滤结果，按照相似度返回最相关的文档
+
+阿里云百炼平台已经集成了，类是：`DashScopeCloudStore`,参考文档：[DashScopeCloudStore](https://java2ai.com/docs/1.0.0-M6.1/tutorials/vectorstore/)
+
+![image-20250615213244185](images/Ai 超级智能体/image-20250615213244185.png)
+
+![image-20250615213614667](images/Ai 超级智能体/image-20250615213614667.png)
+
+DashScopeCloudStore类实现了VectorStore接口，通过调用DashScope API 来使用阿里云提供的远程向量存储：
+
+##### 基于PGVector实现向量存储
+
+PGVector是经典数据库PGSQL的扩展，为PGSQL提供了存储和检索高维向量数据库的能力。
+
+为什么选这个来做向量数据库呢？因为很多传统业务都会将数据存储在这种关系型数据库中，直接给原有数据库安装扩展插件就能实现向量相似性搜索，不需要额外搞一套向量数据库，人力物力成本很低，所以这种方案很受企业青睐，也是目前实现RAG的主流方案之一。
+
+1. 安装PGSQL
+2. 安装pgVector
+
+为了简化学习成本，我们采用简单的方式-阿里云购买PGSQL。
+
+打开[阿里云PGSQL官网](https://www.aliyun.com/product/rds/postgresql)，开通Serverless版本，按用量付费，对于学习来说性价比很高。
+
+1）参考[Spring AI 文档中](https://docs.spring.io/spring-ai/reference/api/vectordbs/pgvector.html)的整合的PGVector，先引入依赖，版本号可以在Maven仓库中找到。
+
+编写配置，建立数据库连接：
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://改为你的公网地址/yu_ai_agent
+    username: 改为你的用户名
+    password: 改为你的密码
+  ai:
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        dimensions: 1536
+        distance-type: COSINE_DISTANCE
+        max-document-batch-size: 10000 # Optional: Maximum number of documents per batch
+```
+
+> 在不确定向量维度的条件下不要指定dimensions。未明确指定的话，PgVectorStore会从提供的EmbeddingModel中检索维度，维度在表创建时设置成嵌入列。如果更改维度，必须重新创建vector_store表。
+
+使用自动注入的VectorStore，系统会自动创建库表：
+
+```java
+@SpringBootTest
+public class PgVectorVectorStoreConfigTest {
+
+    @Resource
+    VectorStore pgVectorVectorStore;
+
+    @Test
+    void test() {
+        List<Document> documents = List.of(
+                new Document("Spring AI rocks!! Spring AI rocks!! Spring AI rocks!! Spring AI rocks!! Spring AI rocks!!", Map.of("meta1", "meta1")),
+                new Document("The World is Big and Salvation Lurks Around the Corner"),
+                new Document("You walk forward facing the past and you turn back toward the future.", Map.of("meta2", "meta2")));
+        // 添加文档
+        pgVectorVectorStore.add(documents);
+        // 相似度查询
+        List<Document> results = pgVectorVectorStore.similaritySearch(SearchRequest.builder().query("Spring").topK(5).build());
+        Assertions.assertNotNull(results);
+    }
+}
+```
+
+但是这种方式并不适合我们的项目，本质是因为VectorStore依赖EmbeddingModel对象，之前同时引入了Ollama和阿里云DashScope依赖，有两个EmbeddingModel的Bean，Spring不知道使用哪一个？就会报错。
+
+2）我们更换另一种更适合的方式来初始化VectorStore，先引入依赖
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>runtime</scope>
+</dependency>
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-pgvector-store</artifactId>
+    <version>1.0.0-M6</version>
+</dependency>
+```
 
 
 
+编写自己构造的VectorStore，不用Starter自动注入。
+
+```java
+@Configuration
+public class PgVectorVectorStoreConfig {
+
+    @Bean
+    public VectorStore pgVectorVectorStore(JdbcTemplate jdbcTemplate, EmbeddingModel dashscopeEmbeddingModel) {
+        VectorStore vectorStore = PgVectorStore.builder(jdbcTemplate, dashscopeEmbeddingModel)
+                .dimensions(1536)                    // Optional: defaults to model dimensions or 1536
+                .distanceType(COSINE_DISTANCE)       // Optional: defaults to COSINE_DISTANCE
+                .indexType(HNSW)                     // Optional: defaults to HNSW
+                .initializeSchema(true)              // Optional: defaults to false
+                .schemaName("public")                // Optional: defaults to "public"
+                .vectorTableName("vector_store")     // Optional: defaults to "vector_store"
+                .maxDocumentBatchSize(10000)         // Optional: defaults to 10000
+                .build();
+        return vectorStore;
+    }
+}
+```
 
 
 
+启动类需要手动排除掉自动加载，
+
+```java
+@SpringBootApplication(exclude = PgVectorStoreAutoConfiguration.class)
+```
+
+3）编写单元测试类
+
+```java
+@SpringBootTest
+public class PgVectorVectorStoreConfigTest {
+
+    @Resource
+    VectorStore pgVectorVectorStore;
+
+    @Test
+    void test() {
+        List<Document> documents = List.of(
+                new Document("Spring AI rocks!! Spring AI rocks!! Spring AI rocks!! Spring AI rocks!! Spring AI rocks!!", Map.of("meta1", "meta1")),
+                new Document("The World is Big and Salvation Lurks Around the Corner"),
+                new Document("You walk forward facing the past and you turn back toward the future.", Map.of("meta2", "meta2")));
+        // 添加文档
+        pgVectorVectorStore.add(documents);
+        // 相似度查询
+        List<Document> results = pgVectorVectorStore.similaritySearch(SearchRequest.builder().query("Spring").topK(5).build());
+        Assertions.assertNotNull(results);
+    }
+}
+```
+
+Debug模式启动，看到文档检索成功，得到了相关的相似度分数：
+
+![image-20250615234243978](images/Ai 超级智能体/image-20250615234243978.png)
+
+同时查看数据库中的数据，发现存在三条数据![image-20250615234320877](images/Ai 超级智能体/image-20250615234320877.png)
+
+查看一下表结构：
+
+![image-20250615234349190](images/Ai 超级智能体/image-20250615234349190.png)
+
+至此，我们的PGVectorStore就整合成功了，你可以用LoveAppDocumentLoader来替换文本来源：
+
+```java
+@Configuration
+public class PgVectorVectorStoreConfig {
+
+    @Resource
+    private LoveAppDocumentLoader loveAppDocumentLoader;
+
+    @Bean
+    public VectorStore pgVectorVectorStore(JdbcTemplate jdbcTemplate, EmbeddingModel dashscopeEmbeddingModel) {
+        VectorStore vectorStore = PgVectorStore.builder(jdbcTemplate, dashscopeEmbeddingModel)
+                .dimensions(1536)
+                .distanceType(COSINE_DISTANCE)
+                .indexType(HNSW)
+                .initializeSchema(true)
+                .schemaName("public")
+                .vectorTableName("vector_store")
+                .maxDocumentBatchSize(10000)
+                .build();
+
+        // 加载文档
+        List<Document> documents = loveAppDocumentLoader.loadMarkdowns();
+        vectorStore.add(documents);
+        return vectorStore;
+    }
+}
+```
 
 
 
+测试一下：（关键词是“结婚”）
 
-
-
-
-
+![image-20250615234815723](images/Ai 超级智能体/image-20250615234815723.png)
 
 
 
