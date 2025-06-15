@@ -2534,25 +2534,285 @@ public class PgVectorVectorStoreConfig {
 
 
 
+###### 扩展--批处理策略
+
+使用向量存储的时候，可能要嵌入大量文档，如果一次性处理大量文档，可能会导致性能问题。
+
+嵌入模型一般有一个最大标记限制，通常称为上下文窗口大小，限制了单个嵌入请求中课可以处理的文本量。如果在一次调用中转换过多文档可能直接导致报错。
+
+为此，Spring AI 实现了批处理策略（Batching Strategy）,将大量的文档分解成较小的批次，使其适合嵌入模型最大上下文窗口，还可以提高性能有效利用API速率限制。
+
+```java
+public interface BatchingStrategy {
+    List<List<Document>> batch(List<Document> documents);
+}
+```
+
+Spring AI 提供了一个名为TokenCountBatchingStrategy的默认实现。这个策略为每一个文档估算Token数量，将文档分组到不超过最大输入Token数的批次中，如果单个文件超过此限制，抛出异常，这样就确保了每一个批次不超过计算出的最大输入Token数。
+
+```java
+@Configuration
+public class EmbeddingConfig {
+    @Bean
+    public BatchingStrategy customTokenCountBatchingStrategy() {
+        return new TokenCountBatchingStrategy(
+            EncodingType.CL100K_BASE,  // 指定编码类型
+            8000,                      // 设置最大输入标记计数
+            0.1                        // 设置保留百分比
+        );
+    }
+}
+```
+
+除了使用默认的之外，也可以自己实现batchingStrategy：
+
+```java
+@Configuration
+public class EmbeddingConfig {
+    @Bean
+    public BatchingStrategy customBatchingStrategy() {
+        return new CustomBatchingStrategy();
+    }
+}
+```
 
 
 
+如果你使用的向量数据库每秒只能插入1万条数据，就可以通过自定义BatchingStrategy控制速率，还可以进行额外的日志记录和异常处理。
+
+#### 文档过滤和检索
 
 
 
+Spring AI提供了“模块化”的RAG架构，用于优化大模型回复的准确性
+
+简单来说，就是将文档过滤过程分成：检索前、检索时、检索后。
+
+- 预检索：系统接收用户的原始查询，通过查询转化和查询扩展对其进行优化。
+- 检索阶段：使用增强的查询从知识库中搜索相关的文档，可能涉及到多个检索源合并，最终输出一组相关文档
+- 检索后：系统对检索到的文档进行进一步处理，包括排序、选择最相关的子集以及压缩文档内容，输出经过优化的文档集
+
+##### 预检索：优化用户查询
+
+###### 查询转换 - 查询重写
+
+`RewriteQueryTransformer`使用大语言模型对用户的原始查询进行改写，使得更加详细和清晰。
+
+```java
+Query query = new Query("什么是Transformer啊啊啊啊啊啊啊");
+QueryTransformer queryTransformer = RewriteQueryTransformer.builder()
+  .chatClientBuilder(chatClientBuilder)
+  .build();
+
+Query transformedQuery = queryTransformer.transform(query);
+```
+
+可以从源码中看到提示词：
+
+![image-20250616010101086](images/Ai 超级智能体/image-20250616010101086.png)
+
+也可以通过构造方法的`promptTemplate`参数自定义组件使用提示模板：
+
+![image-20250616010223728](images/Ai 超级智能体/image-20250616010223728.png)
+
+**查询转换 - 查询翻译**
+
+`TranslationQueryTransformer`将查询翻译成嵌入模型支持的目标语言。如果查询已经是目标语言，则保持不变。对于嵌入模型是针对于语言特定训练而用户使用不同的语言查询非常重要。
+
+实例代码：
+
+```java
+Query query = new Query("Hi, who is Libai, please answer me!");
+
+QueryTransformer queryTransformer = TranslationQueryTransformer.builder()
+  .chatClientBuilder(chatClientBuilder)
+  .targetLanguage("简体中文")
+  .build();
+
+Query transformerQuery = queryTransformer.transform)(query);
+```
+
+语言可以随意指定，查看源码发现，其实也是一个Prompt：
+
+![image-20250616010820928](images/Ai 超级智能体/image-20250616010820928.png)
+
+不过不建议使用，毕竟只是一个翻译，其实使用这个查询器的话也是会占用Token，导致成本增加，使用翻译的话直接使用三方的翻译SDK即可。
+
+（百度翻译、火山翻译、google Translation等等）
 
 
 
+**查询转换 - 查询压缩**
+
+`CompressionQueryTransformer`使用大语言模型将对话历史和后续查询压缩成一个独立的查询，类似于概括总结。
+
+实例代码：
+
+```java
+Query query = Query.builder()
+  .text("Google能干啥？")
+  .history(new UserMessage("谁是Trump？"), 
+          new AssistantMessage("美国伟人"))
+  .build();
+
+QueryTransformer queryTransformer = CompressionQueryTransformer.builder()
+  .chatClientBuilder(chatClientBuilder)
+  .build();
+
+Query transformQuery = queryTransformer.transform(query);
+```
 
 
 
+查看源码，![image-20250616011545141](images/Ai 超级智能体/image-20250616011545141.png)
+
+**查询扩展 - 多查询扩展**
+
+`MultiQueryExpander`使用大模型将一个查询扩展为多个语义上不同的变体，有助于检索额外的上下文信息并增加找到相关结果的机会，
+
+实例代码：
+
+```java
+MultiQueryExpander queryExpander = MultiQueryExpander.builder()
+    .chatClientBuilder(chatClientBuilder)
+    .numberOfQueries(3)
+    .build();
+List<Query> queries = queryExpander.expand(new Query("啥是尤雨溪？他会啥？"));
+```
 
 
 
+默认情况下，会在查询扩展列表的时候包含原始查询，可以在构造时通过`includeOriginal`方法改变这个行为：
+
+```java
+MultiQueryExpander queryExpander = MultiQueryExpander.builder()
+    .chatClientBuilder(chatClientBuilder)
+    .includeOriginal(false)
+    .build();
+```
+
+查看源码：
+
+![image-20250616012105134](images/Ai 超级智能体/image-20250616012105134.png)
+
+![image-20250616012213488](images/Ai 超级智能体/image-20250616012213488.png)
+
+先使用Prompt提问AI，得到的响应会根据换行进行拆分。
+
+###### 检索 提高查询相关性
+
+**文档搜索**
+
+利用的是`DocumentRetriever`的概念，这是Spring AI提供的文档检索器，每种不同的存储方案都有自己的文档检索器实现类，比如：`VectorStoreDocumentRetriever`，从向量存储中检索与输入查询语句相似的文档。支持基于元数据的过滤、设置相似度阈值、设置返回的结果数。
 
 
 
+```java
+DocumentRetriever retriever = VectorStoreDocumentRetriever.builder()
+    .vectorStore(vectorStore)
+    .similarityThreshold(0.7)
+    .topK(5)
+    .filterExpression(new FilterExpressionBuilder()
+        .eq("type", "web")
+        .build())
+    .build();
+List<Document> documents = retriever.retrieve(new Query("谁是唐朝李白"));
+```
 
+
+
+上述的filterExpression可以灵活的指定过滤条件，当然也可以通过构造Query对象的`FILTER_EXPRESSION`参数动态指定过滤表达式：
+
+```java
+Query query = Query.builder()
+    .text("谁是鱼皮？")
+    .context(Map.of(VectorStoreDocumentRetriever.FILTER_EXPRESSION, "type == 'boy'"))
+    .build();
+List<Document> retrievedDocuments = documentRetriever.retrieve(query);
+```
+
+**文档合并**
+
+Spring AI内置了`ConcatenationDocumentJoiner`文档合并器，通过连接操作，将基于多个查询和来自多个数据源检索到的文档合并成单个文档集合。在遇到重复文档时，会保留首次出现的文档，每个文档的分数保持不变。
+
+示例代码：
+```java
+Map<Query, List<List<Document>>> documentsForQuery = ...
+DocumentJoiner documentJoiner = new ConcatenationDocumentJoiner();
+List<Document> documents = documentJoiner.join(documentsForQuery);
+```
+
+这个源码的原理很简单，其实就是将Map展开为二维列表、再将二维列表展开成文档列表，最后进行去重。![image-20250616013858902](images/Ai 超级智能体/image-20250616013858902.png)
+
+**检索后：优化文档处理**
+
+暂时略过，用到的机会不大。
+
+##### 查询增强和关联
+
+生成阶段是RAG流程的最后阶段，负责将检索到的文档和用户查询结合起来，为AI提供必要的上下文，从未生成更准确、更相关的回答。
+
+之前我们已经了解Spring AI 提供的两种实现的 RAG查询增强Advisor ，分别是`QuestionAnswerAdvisor`和`RetrievalAugmentation Advisor`。
+
+###### QuestionAnswerAdvisor查询增强
+
+当用户问题发送到AI模型时，Advisor会查询向量数据库来获取与用户问题相关的文档，并将这些文档作为上下文附加到用户查询中。
+
+使用方式：
+
+```java
+ChatResponse response = ChatClient.builder(chatModel)
+        .build()
+  			.prompt()
+        .advisors(new QuestionAnswerAdvisor(vectorStore))
+        .user(userText)
+        .call()
+        .chatResponse();
+```
+
+
+
+我们可以通过建造者模式配置更精细的参数，比如文档过滤条件。
+
+```java
+var qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
+              // 相似度阈值为 0.8，并返回最相关的前 6 个结果
+        .searchRequest(SearchRequest.builder().similarityThreshold(0.8d).topK(6).build())
+        .build();
+```
+
+`QuestionAnswerAdvisor`还支持动态过滤表达式，可以在运行时根据需要调整过滤条件：
+
+```java
+ChatClient chatClient = ChatClient.builder(chatModel)
+  .defaultAdvisors(QuestionAnswerAdvisor.builder(vectorStore)
+                  .searchRequest(SearchRequest.builder().build())
+                  .build())
+  .build();
+
+// 在运行时更新过滤表达式
+String content = this.chatClient.prompt()
+  .user("Super idol 的笑容，都没你的甜")
+  .advisors(a -> a.param(QuestionAnswerAdvisor.FILTER_EXPRESSION, "type == 'web'"))
+  .call()
+  .content();
+```
+
+`QuestionAnswerAdvisor`的实现原理很简单，把用户提示词和检索到的文档等上下文信息拼成一个新的Prompt，再调用AI：
+
+![image-20250616015222217](images/Ai 超级智能体/image-20250616015222217.png)
+
+我们也可以自定义提示词模板，控制如何将检索到的文档与用户查询结合：
+
+```java
+QuestionAnswerAdvisor qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
+    .promptTemplate(customPromptTemplate)
+    .build();
+```
+
+###### RetirevalAugmentationAdvisor查询增强
+
+Spring AI 提供另一个RAG的实现方式，它基于RAG模块化架构，提供了更多的灵活性和定制选项。
 
 
 
