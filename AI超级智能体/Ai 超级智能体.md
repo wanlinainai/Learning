@@ -2814,13 +2814,115 @@ QuestionAnswerAdvisor qaAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
 
 Spring AI 提供另一个RAG的实现方式，它基于RAG模块化架构，提供了更多的灵活性和定制选项。
 
+最简单的RAG流程可以通过以下的方式实现：
+
+```java
+Advisor retrivalAugmentationAdvisor = RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(VectorStoreDocumentRetriever.builder()
+                        .similarityThreshold(0.5)
+                        .vectorStore(loveAppVectorStore)
+                        .build())
+                .build();
+        String answer = chatClient.prompt()
+                .advisors(retrivalAugmentationAdvisor)
+                .user(question) // String
+                .call()
+                .content();
+```
 
 
 
+上述代码中，我们配置了`VectorStoreDocumentRetriver`文档检索器，用于从向量存储中检索文档。之后将这个Advisor添加到ChatClient请求中，让他处理用户问题。
+
+`RetrievalAugmentationAdvisor`还支持更高级的RAG流程，比如结合查询转换器：
+
+```java
+ RetrievalAugmentationAdvisor build = RetrievalAugmentationAdvisor.builder()
+                .queryTransformers(RewriteQueryTransformer.builder()
+                        .chatClientBuilder(chatClientBuilder.build().mutate())
+                        .build())
+                .documentRetriever(VectorStoreDocumentRetriever.builder()
+                        .similarityThreshold(0.5)
+                        .vectorStore(loveAppVectorStore)
+                        .build())
+                .build();
+```
+
+上述代码中，我们添加了一个`RewriteQueryTransformer`，它会在检索之前重写用户的原始查询，使其更加明确详细和详细，从而显著提升检索的 质量。
+
+###### ContextQueryAugment空上下文处理
+
+默认情况下，`RetriveAugmentationAdvisor`不允许检索上下文为空，如果没有找到相关的文档，会指示模型不要回答用户查询。这是一种保守的策略。可以通过以下方式开启允许空上下文：
+
+```java
+Advisor retrievalAugmentationAdvisor = RetrievalAugmentationAdvisor.builder()
+        .documentRetriever(VectorStoreDocumentRetriever.builder()
+                .similarityThreshold(0.50)
+                .vectorStore(vectorStore)
+                .build())
+        .queryAugmenter(ContextualQueryAugmenter.builder()
+                .allowEmptyContext(true)
+                .build())
+        .build();
+
+String answer = chatClient.prompt()
+        .advisors(retrievalAugmentationAdvisor)
+        .user(question)
+        .call()
+        .content();
+```
+
+`ContextualQueryAugmenter`允许我们自定义提示模板，
+
+```java
+QueryAugmenter queryAugmenter = ContextualQueryAugmenter.builder()
+                        .promptTemplate(customPromptTemplate)
+                                .emptyContextPromptTemplate(emptyContextPromptTempldate);
+```
 
 
 
+### RAG实践和调优
 
+#### 文档收集和切割
+
+文档的质量决定了AI回答能力的上限，其他优化策略只是让AI回答能力不断接近上限。
+
+##### 1、优化原始文档
+
+**只是完备性**是文档质量的首要条件。如果知识库缺少相关内容，大模型将无法准确回答对应问题。我们需要通过收集用户反馈或统计知识库命中率，不断完善优化知识库内容。
+
+**内容结构化**
+
+1）原始文档应保持排版清晰、结构合理，如案例编号、项目概述、设计要点等
+
+2）文档的各级标题层次分明，个标题内容表达清晰
+
+3）列表中间的某一条之下尽量不要再分级，减少层级嵌套
+
+**内容规范化**
+
+1）语言统一：确保文档语言与用户提示词一致，专业术语进行多语言标注
+
+2）表述统一：同一概念使用统一表达式
+
+3）减少噪音：尽量避免水印、表格和图片等可能产生影响的因素
+
+
+
+**格式标准化**
+
+1）优先使用Markdown、Doc/Docx等文本文档（PDF的效果可能不好）
+
+2）如果文档中包含图片，需链接化处理，确保回答中能正常展示文档的插图，可以通过在文档中插入可公网访问URL 链接实现
+
+##### 2、文档切片
+
+合适的文档切片大小和方式对检索效果至关重要。
+
+文档切片尺寸需要根据具体情况灵活调整，避免两个极端：切片太短导致语义缺失，切片太长导致无关信息。具体需结合文档类型和提示词复杂度。
+
+最佳分片策略是**结合只能分块算法和人工二次校验**。
 
 
 
