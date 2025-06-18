@@ -3040,6 +3040,30 @@ public class MyKeywordEnricher {
 
 ![image-20250619004044675](images/Ai 超级智能体/image-20250619004044675.png)
 
+#### 向量转换和存储
+
+##### 向量存储配置
+
+需要根据费用成本、数据规模、性能、开发成本来选择向量存储方案，比如Redis、MongoDB
+
+实现方式：
+
+```java
+SimpleVectorStore vectorStore = SimpleVectorStore.builder(embeddingModel).build();
+```
+
+云平台中，通常提供了多种存储选项，比如内置的向量存储或云数据库。
+
+![image-20250619005010097](images/Ai 超级智能体/image-20250619005010097.png)
+
+##### 选择合适的EmbeddingModel
+
+通常云平台的话也是可以选择模型的：
+
+![image-20250619005158541](images/Ai 超级智能体/image-20250619005158541.png)
+
+#### 文档过滤和检索
+
 
 
 
