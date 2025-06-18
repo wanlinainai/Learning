@@ -2922,13 +2922,123 @@ QueryAugmenter queryAugmenter = ContextualQueryAugmenter.builder()
 
 文档切片尺寸需要根据具体情况灵活调整，避免两个极端：切片太短导致语义缺失，切片太长导致无关信息。具体需结合文档类型和提示词复杂度。
 
-最佳分片策略是**结合只能分块算法和人工二次校验**。
+最佳分片策略是**结合只能分块算法和人工二次校验**。智能分块算法基于分局标识符先划分为段落，再根据语义相关性动态选择切分点，避免固定长度切分导致的语义断裂。在实际应用中，尽量让文本切片包含完整信息，同时避免包含过多干扰信息。
+
+在实现上来说，可以通过Spring AI 的[ETL Pipeline](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_tokentextsplitter)提供的DocumentTransformer来调整切片规则：
+
+```java
+@Component
+public class MyTokenTextSplitter {
+    public List<Document> splitDocuments(List<Document> documents) {
+        TokenTextSplitter splitter = new TokenTextSplitter();
+        return splitter.apply(documents);
+    }
+
+    public List<Document> splitCustomized(List<Document> documents) {
+        TokenTextSplitter splitter = new TokenTextSplitter(1000, 400, 10, 500, true);
+        return splitter.apply(documents);
+    }
+}
+```
+
+使用切分器
+
+```java
+// 使用分词器
+        SimpleVectorStore simpleVectorStore = SimpleVectorStore.builder(dashscopeEmbeddingModel)
+                .build();
+        // 加载文档
+        List<Document> documents = loveAppDocumentLoader.loadMarkdowns();
+        // 自主切分
+        List<Document> splitDocuments = myTokenTextSplitter.splitCustomized(documents);
+        simpleVectorStore.add(splitDocuments);
+        return simpleVectorStore;
+```
 
 
 
+手动调整切分参数很难把握合适值，容易破坏语义完整性。
+
+如若使用云服务的话，推荐在创建知识库的时候开启智能切分，这是平台经过大量评估之后的推荐策略。
+
+![image-20250619001849407](images/Ai 超级智能体/image-20250619001849407.png)
+
+采用智能切分策略时，知识库就会：
+
+- 首先利用系统内置的分居标识符文档划分为若干段落
+- 基于划分的段落，根据语义相关性自适应选择切片点进行切分，并非固定长度切分
+
+##### 3、元数据标注
+
+可以为文档添加丰富的结构化信息，俗称元信息，形成多维索引，便于后续向量化处理和精准检索。
+
+在实现中，可以通过多种方式为文档添加元数据。
+
+**手动添加元信息**
+
+```java
+documents.add(new Document("案例编号：*********"
+                          + "项目概述：180平米大平层现代简约风格客厅改造") 
+             + "设计要点：	\n" + 
+"1. 采用5.2米挑高的落地窗，最大化自然采光 \n"
+             + "2. 主色调：白金黑（曝光、NCS S0500-N配合蓝色）" 
+             + "3. 家具选择：红木家具" 
+             + "空间效果：通透大气，适合商务接待和家庭日常聚餐", 
+             Map.of(
+             	"type": "interior", // 文档类型
+               "year": "2025", // 年份
+               "month": "05", //月份
+               "style": "modern" // 装修风格
+             )) 
+```
 
 
 
+**利用DocumentReader批量添加元信息**
+
+我们可以在加载文档的时候为每一篇文章添加特定标签，比如：“恋爱状态”
+
+```java
+// 提取文档倒数第 3 和第 2 个字作为标签
+String status = fileName.substring(fileName.length() - 6, fileName.length() - 4);
+MarkdownDocumentReaderConfig config = MarkdownDocumentReaderConfig.builder()
+        .withHorizontalRuleCreateDocument(true)
+        .withIncludeCodeBlock(false)
+        .withIncludeBlockquote(false)
+        .withAdditionalMetadata("filename", fileName)
+        .withAdditionalMetadata("status", status)
+        .build();
+```
+
+
+
+比如：
+
+![image-20250619003247447](images/Ai 超级智能体/image-20250619003247447.png)
+
+**自动添加元信息**
+
+Spring AI 提供了生成信息的[Transformer组件](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html#_keywordmetadataenricher)，可以基于AI自动解析关键词并添加到元信息中。代码如下：
+
+```java
+@Component
+public class MyKeywordEnricher {
+    private final ChatModel chatModel;
+
+    public MyKeywordEnricher(ChatModel chatModel) {
+        this.chatModel = chatModel;
+    }
+
+    List<Document> enrichDocuments(List<Document> documents) {
+        KeywordMetadataEnricher enricher = new KeywordMetadataEnricher(this.chatModel, 5);
+        return enricher.apply(documents);
+    }
+}
+```
+
+在云服务平台中，如阿里云百炼，同样支持元数据和标签功能，可以通过平台API或界面设置标签，以及通过标签实现快速过滤：
+
+![image-20250619004044675](images/Ai 超级智能体/image-20250619004044675.png)
 
 
 
