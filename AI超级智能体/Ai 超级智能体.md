@@ -3194,6 +3194,35 @@ DocumentRetriever documentRetriever = VectorStoreDocumentRetriever.builder()
 
 ###### 控制返回文档数量（召回片段数）
 
+控制返回给模型的文档数量，平衡信息完整性和噪音水平。
+
+```java
+DocumentRetriever documentRetriever = VectorStoreDocumentRetriever.builder()
+        .vectorStore(loveAppVectorStore)
+        .similarityThreshold(0.5) // 相似度阈值
+        .topK(3) // 返回文档数量
+        .build();
+```
+
+阿里云百炼中也是包含召回的片段数，参考文档：[提高召回片段数](https://help.aliyun.com/zh/model-studio/rag-optimization#a0086e42d9n12)部分。
+
+![image-20250619164337568](Ai 超级智能体/image-20250619164337568-17503226189961.png)
+
+最终会选取相似度分数最高的K个文本切片。
+
+在多路召回的场景下，如果应用关联了多个知识库，系统会从这些库中检索相关文本切片，通过重排序，选出最相关的前K条提供给大模型参考。
+
+###### 配置文档过滤规则
+
+通过文档过滤规则可以控制查询范围，提高检索精度和效率。
+
+| 场景                                           | 解决方案                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------ |
+| 知识库中包含了多种类别的文档，希望限定检索范围 | 为文档添加标签，知识库检索的时候会先根据标签筛选相关文档     |
+| 知识库中有多篇结构相似的文档，希望精确确定位   | 提取元数据，知识库会先使用元数据进行结构化搜索，再进行向量检索 |
+
+在实现中，使用Spring AI 内置的文档检索器提供的`FilterExpression`配置过滤规则
+
 
 
 
