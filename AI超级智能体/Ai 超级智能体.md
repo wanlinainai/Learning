@@ -3064,7 +3064,135 @@ SimpleVectorStore vectorStore = SimpleVectorStore.builder(embeddingModel).build(
 
 #### 文档过滤和检索
 
+##### 多查询扩展
 
+在多轮对话的场景下，用户输入的提示词可能不完整，存在歧义。多查询扩展技术可以扩大检索范围，提高相关文档的召回率。
+
+使用多查询扩展时，需要注意：
+
+- 设置合适的查询数量（3-5个），过多会影响性能，增加成本
+- 保留原始查询的核心语义
+
+在实现过程中，可以通过如下代码实现多查询扩展：
+
+```java
+ MultiQueryExpander queryExpander = MultiQueryExpander.builder()
+                .chatClientBuilder(chatClientBuilder)
+                .numberOfQueries(3)
+                .build();
+List<Query> queries = queryExpander.expand(new Query("谁是唐朝李白啊?"));
+```
+
+获得扩展查询之后，可以直接用于检索文档、或者提取查询文本来改写提示词：
+
+```java
+DocumentRetriever retriever = VectorStoreDocumentRetriever.builder()
+    .vectorStore(vectorStore)
+    .similarityThreshold(0.73)
+    .topK(5)
+    .filterExpression(new FilterExpressionBuilder()
+        .eq("genre", "fairytale")
+        .build())
+    .build();
+// 直接用扩展后的查询来获取文档
+List<Document> retrievedDocuments = documentRetriever.retrieve(query);
+// 输出扩展后的查询文本
+System.out.println(query.text());
+```
+
+多查询扩展的完整使用流程：
+
+1. 使用扩展后的查询召回文档：遍历扩展后的查询列表，对每一个查询使用`DocumentRetriver`来召回相关文档。
+2. 整合召回文档：将每个查询召回的文档进行整合，形成一个包含所有相关信息的文档集合。
+3. 使用召回的文档改写`Prompt`：将整合后的文档内容添加到原始`Prompt`中，所以个人建议慎用这种方式。
+
+##### 查询重写和翻译
+
+查询重写和翻译可以使查询更加准确和专业，但是要注意保持查询语义的完整性。
+
+主要应用是：
+
+- `RewriteQueryTransformer`：优化查询结构
+- `TranslationQueryTransformer`：支持多语言
+
+参考[官方文档](https://java2ai.com/docs/1.0.0-M6.1/tutorials/rag/#32-query-rewrite-%E6%9F%A5%E8%AF%A2%E9%87%8D%E5%86%99)实现一下查询重写：
+
+```java
+@Component
+public class MyRewriteQueryTransformer {
+
+    // 创建查询重写器
+    private final QueryTransformer queryTransformer;
+
+    public MyRewriteQueryTransformer(ChatModel dashscopeChatModel) {
+        ChatClient.Builder builder = ChatClient.builder(dashscopeChatModel);
+        // 创建查询重写器
+        queryTransformer = RewriteQueryTransformer.builder()
+                .chatClientBuilder(builder)
+                .build();
+    }
+
+    public String doQueryRewrite(String prompt) {
+        Query query = new Query(prompt);
+        // 执行查询重写
+        Query transformQuery = queryTransformer.transform(query);
+        // 输出重写之后的查询
+        return transformQuery.text();
+    }
+}
+```
+
+应用一下看看效果：
+
+```java
+@Resource
+private MyRewriteQueryTransformer queryTransformer;    
+
+public String doChatWithRAG(String message, String chatId) {
+        // todo  查询重写器
+        String rewriteMessage = queryTransformer.doQueryRewrite(message);
+        ChatResponse chatResponse = chatClient.prompt()
+                .user(rewriteMessage)
+                .call()
+                .chatResponse();
+        String content = chatResponse.getResult().getOutput().getText();
+        return content;
+    }
+```
+
+运行测试案例，结果如下：
+
+![image-20250619150701103](Ai 超级智能体/image-20250619150701103.png)
+
+很清楚的看到rewriteMessage中的内容是优化之后的。在云服务中，可以开启多轮会话改写功能，自动将用户的提示词转换成更加完整的形式：
+
+![image-20250619150859393](Ai 超级智能体/image-20250619150859393.png)
+
+##### 检索器配置
+
+检索器配置是影响检索质量的关键因素，主要包含了三个方面：相似度阈值、返回文档数量和过滤规则。
+
+###### 设置合理的相似度阈值
+
+相似度阈值控制文档被找回的标准，需要根据具体的问题调整相似度阈值
+
+| 问题                                               | 解决方案                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------ |
+| 知识库的召回结果不完整，没有包含全部相关的文本切片 | 降低相似度阈值，提高召回片段数，以召回一些原本应被检索到的信息 |
+| 知识库的召回结果中包含大量无用的文本切片           | 提高阈值，排除与用户提示词相似度较低的信息                   |
+
+```java
+DocumentRetriever documentRetriever = VectorStoreDocumentRetriever.builder()
+        .vectorStore(loveAppVectorStore)
+        .similarityThreshold(0.5) // 相似度阈值
+        .build();
+```
+
+也可以在云平台开启。
+
+![image-20250619151605394](Ai 超级智能体/image-20250619151605394.png)
+
+###### 控制返回文档数量（召回片段数）
 
 
 
