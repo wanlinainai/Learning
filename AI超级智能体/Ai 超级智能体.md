@@ -3221,7 +3221,179 @@ DocumentRetriever documentRetriever = VectorStoreDocumentRetriever.builder()
 | 知识库中包含了多种类别的文档，希望限定检索范围 | 为文档添加标签，知识库检索的时候会先根据标签筛选相关文档     |
 | 知识库中有多篇结构相似的文档，希望精确确定位   | 提取元数据，知识库会先使用元数据进行结构化搜索，再进行向量检索 |
 
-在实现中，使用Spring AI 内置的文档检索器提供的`FilterExpression`配置过滤规则
+在实现中，使用Spring AI 内置的文档检索器提供的`FilterExpression`配置过滤规则。
+
+```java
+@Slf4j
+public class LoveAppRagCustomAdvisorFactory {
+    public static Advisor createLoveAppRagCustomAdvisor(VectorStore vectorStore, String status) {
+        Filter.Expression expression = new FilterExpressionBuilder()
+                .eq("status", status)
+                .build();
+        DocumentRetriever documentRetriever = VectorStoreDocumentRetriever.builder()
+                .vectorStore(vectorStore)
+                .filterExpression(expression) // 过滤条件
+                .similarityThreshold(0.5) // 相似度阈值
+                .topK(3) // 返回文档数量
+                .build();
+        return RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(documentRetriever)
+                .build();
+    }
+}
+```
+
+
+
+给恋爱大师应用LoveApp的ChatClient对象应用这个Advisor。
+
+```java
+chatClient.advisors(
+    LoveAppRagCustomAdvisorFactory.createLoveAppRagCustomAdvisor(
+        loveAppVectorStore, "已婚"
+    )
+)
+```
+
+使用云平台，目前支持以下两种方式使用标签来实现过滤：
+
+1. [通过云百炼平台](https://help.aliyun.com/zh/model-studio/application-calling-guide#4100253b7chc3)时，可以在请求参数`tag`中指定标签。
+2. 在控制台编辑应用时设置标签（本方式只能适用于[智能体应用](https://help.aliyun.com/zh/model-studio/single-agent-application)）。
+
+![image-20250619222137530](images/Ai 超级智能体/image-20250619222137530.png)
+
+云百炼还支持元数据过滤，开启之后，知识库会在向量检索前增加一层结构化搜索：
+
+1. 从提示词提取元数据{key: "name", "value": "super idol"}
+2. 根据提取的元数据，找到所有包含这个元数据的文本切片
+3. 再进行向量（语义）检索，找到最相关的文本切片
+
+> 按照ChatGPT来说的：拿到的元数据是：{source: product_doc, page = 3}，拿一本书来距离，这本书是《绿楼梦》source就是这本书的内容，page就是对应的页码，能够找到具体的内容。
+
+通过API调用应用时，可以在请求参数`metadata_filter`中指定metaData，应用在检索知识的时候，会先根据metaData筛选相关文档，实现精准过滤，[参考官方文档](https://help.aliyun.com/zh/model-studio/application-calling-guide#6bd8094de7e1e)。
+
+#### 查询增强和关联
+
+大模型在进行前面的文档检索，大模型需要根据用户提示词和检索内容生成最终的返回结果，但是，此时的返回结果很可能仍未达到预期，需要进一步优化。
+
+##### 错误处理机制
+
+实际应用中，可能出现多种异常情况。
+
+异常处理主要包括：
+
+1. 允许空上下文查询
+2. 提供有好的错误提示
+3. 引导用户提供必要信息
+
+边界情况处理可以使用Spring AI 的ContextualQueryAugmenter上下文查询增强器：
+
+```java
+public class LoveAppContextualQueryAugmenterFactory {
+    public static ContextualQueryAugmenter createInstance() {
+        PromptTemplate promptTemplate = new PromptTemplate("你应该输出以下内容：" +
+                "抱歉，我只能回答恋爱相关的问题，别的问题没有办法帮助到你呢？" +
+                "有问题的话请联系：张德彪");
+        return ContextualQueryAugmenter.builder()
+                .allowEmptyContext(false)
+                .emptyContextPromptTemplate(promptTemplate)
+                .build();
+    }
+}
+```
+
+如果不使用自定义的处理器，或者没有“允许空上下文”选项，会默认改写用户查询的userText。
+
+```txt
+The user query is outside your knowledge base.
+Politely inform the user that you can't answer it.
+```
+
+如果开启了允许空上下文，系统会自动处理空Prompt，不会改写用户输入，使用的是原本的查询。
+
+![image-20250619233426019](images/Ai 超级智能体/image-20250619233426019.png)
+
+上面我们已经定义了自定义的处理空Prompt的情况，给检索增强器新增自定义的`ContextualQueryAugment`。
+
+```java
+return RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(documentRetriver)
+                .queryAugmenter(LoveAppContextualQueryAugmenterFactory.createInstance())
+                .build();
+```
+
+系统找不到相关文档的时候，就会返回我们的自定义的友好提示：
+
+![image-20250619233647311](images/Ai 超级智能体/image-20250619233647311.png)
+
+##### 其他建议
+
+| 问题类型                                           | 改进策略                               |
+| -------------------------------------------------- | -------------------------------------- |
+| 大模型并未理解知识和用户提示词之间的关系，答案生硬 | 选择合适的大模型，提升语义理解能力     |
+| 返回结果没有按照要求，不够全面                     | 优化提示词模板                         |
+| 返回结果不精确，混入了模型自身的通用知识           | 开启拒识功能，限制模型之基于知识库回答 |
+| 相似提示词，希望控制回答的一致性或多样性           | 建议调整大模型参数，如温度值等         |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
