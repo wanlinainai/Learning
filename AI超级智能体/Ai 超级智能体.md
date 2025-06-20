@@ -3454,6 +3454,36 @@ return RetrievalAugmentationAdvisor.builder()
 
 
 
+```java
+@Slf4j
+public class LoveAppRagCustomAdvisorFactory {
+    public static Advisor createLoveAppRagCustomAdvisor(VectorStore vectorStore, String status) {
+        Filter.Expression expression = new FilterExpressionBuilder()
+                .eq("status", status)
+                .build();
+
+        VectorStoreDocumentRetriever documentRetriver = VectorStoreDocumentRetriever.builder().vectorStore(vectorStore)
+                .filterExpression(expression)
+                .similarityThreshold(0.5)
+                .topK(3)
+                .build();
+
+        return RetrievalAugmentationAdvisor.builder()
+                .documentRetriever(documentRetriver).build();
+    }
+}
+```
+
+给LoveApp添加这个Advisor。
+
+```java
+chatClient.advisors(
+    LoveAppRagCustomAdvisorFactory.createLoveAppRagCustomAdvisor(
+        loveAppVectorStore, "已婚"
+    )
+)
+```
+
 
 
 
