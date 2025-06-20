@@ -3758,7 +3758,105 @@ public class FileOperationToolTest {
 
 #### 2）联网搜索
 
+联网搜索工具的作用是根据关键词搜索网页列表
 
+我们可以使用专业的搜索API，如[Search API](https://www.searchapi.io/)来实现从多个网站检索内容，这一类服务一般是按量付费。也可以使用Google或者Bing的搜索API（甚至是直接使用爬虫）。
+
+1）观察官方给的示例中的JSON格式，找到我们需要的内容。
+
+```java
+{
+  "organic_results": [
+    ...
+    {
+      "position": 2,
+      "title": "【动物星球】动物星球商城_Animal Planet是什么牌子",
+      "link": "https://pinpai.smzdm.com/59685/",
+      "displayed_link": "什么值得买",
+      "snippet": "实时推荐动物星球(Animal Planet)商城正品特价。结合动物星球评测与动物星球最新资讯,全方位介绍Animal Planet是什么牌子?什么值得买综合各类动物星球优惠信息,计算最优购买方案,帮您轻松搞定正品...",
+      "snippet_highlighted_words": ["Animal", "Planet"],
+      "thumbnail": "https://t8.baidu.com/it/u=1026803159,4238637210&fm=217&app=126&size=f242,150&n=0&f=JPEG&fmt=auto?s=01F65C9344640CAA12FCF17B0300D030&sec=1714842000&t=c3db150577185f3a818a8bbe73ddd2c4"
+    },
+    ...
+  ]
+}
+```
+
+2）工具代码
+
+```java
+public class WebSearchTool {
+    public static final String SEARCH_URL = "https://www.searchapi.io/api/v1/search";
+
+    private final String apiKey;
+
+    public WebSearchTool(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    /**
+     * 搜索方法
+     * @param query
+     * @return
+     */
+    @Tool(description = "Search for informations from baidu Search Engine")
+    public String searchWeb(@ToolParam(description = "Search query keyword") String query) {
+        Map<String, Object> paraMap = new HashMap<>();
+        paraMap.put("q", query);
+        paraMap.put("api_key", apiKey);
+        paraMap.put("engine", "baidu");
+        try {
+            String response = HttpUtil.get(SEARCH_URL, paraMap);
+            // 取出前五条
+            JSONObject jsonObject = JSONUtil.parseObj(response);
+            // 提取organic_results字段
+            JSONArray organicResults = jsonObject.getJSONArray("organic_results");
+            List<Object> objects = organicResults.subList(0, 5);
+            // 拼接搜索结果为字符串
+            String result = objects.stream().map(obj -> {
+                JSONObject tmpJsonObject = (JSONObject) obj;
+                return tmpJsonObject.toString();
+            }).collect(Collectors.joining(","));
+            return result;
+        } catch (Exception e) {
+            return "Error searching Baidu: " + e.getMessage();
+        }
+    }
+}
+```
+
+3）我们需要获取到API Key来调用网页搜索
+
+4）配置文件中加上配置：
+
+```yaml
+search-api:
+  api-key: ************
+```
+
+5）编写单元测试
+
+```java
+@SpringBootTest
+public class WebSearchToolTest {
+    @Value("${search-api.api-key}")
+    private String searchApiKey;
+
+    @Test
+    public void testSearchWeb() {
+        WebSearchTool tool = new WebSearchTool(searchApiKey);
+        String query = "比特币今天的价格是多少？";
+        String result = tool.searchWeb(query);
+        assertNotNull(result);
+    }
+}
+```
+
+运行效果如图，成功搜索到了网页：
+
+![image-20250621003912794](images/Ai 超级智能体/image-20250621003912794.png)
+
+实际应用中，只需要选择需要的信息即可。
 
 
 
