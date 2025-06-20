@@ -3663,6 +3663,101 @@ ChatClient chatClient = ChatClient.builder(chatModel)
 
 ![image-20250620232943976](images/Ai 超级智能体/image-20250620232943976.png)
 
+### 主流工具开发
+
+如果社区中没有具体的工具，那么只能我们自己造轮子了。注意的是AI可以完成的任务没有必要为了所谓的精益求精自己构造一个工具轮子，因为这会增加一次额外的交互，我们应该将工具用于AI无法完成的任务。
+
+#### 1）文件操作
+
+我们就用最简单的读文件和写文件来演示：
+
+首先定义一个常量接口`FileConstant`用来表示当前的文件保存路径
+
+```java
+public interface FileConstant {
+    /**
+     * 文件保存目录
+     */
+    String FILE_SAVE_PATH = System.getProperty("user.dir") + "/tmp";
+}
+```
+
+文件工具类
+
+```java
+/**
+ * @ClassName: FileOperationTool
+ * @Author: zxh
+ * @Date: 2025/6/20 23:46
+ * @Description: 文件操作工具类
+ */
+public class FileOperationTool {
+    private final String FILE_DIR = FileConstant.FILE_SAVE_PATH + "/file";
+
+    /**
+     * 读文件
+     * @param fileName
+     * @return
+     */
+    @Tool(description = "Read content from a file")
+    public String readFile(@ToolParam(description = "Name of the file to read", required = false) String fileName) {
+        String filePath = FILE_DIR + "/" + fileName;
+        try {
+            return FileUtil.readUtf8String(filePath);
+        } catch (Exception e) {
+            return "Error reading file:" + e.getMessage();
+        }
+    }
+
+    /**
+     * 写文件
+     * @param fileName
+     * @param content
+     * @return
+     */
+    @Tool(description = "Write content to a file")
+    public String writeFile(
+            @ToolParam(description = "Name of the file to write") String fileName,
+            @ToolParam(description = "Content of the write to the file") String content) {
+        String filePath = FILE_DIR + "/" + fileName;
+        try {
+            // 创建目录
+            FileUtil.mkdir(FILE_DIR);
+            FileUtil.writeUtf8String(content, filePath);
+            return "File written successfully to: " + filePath;
+        } catch (Exception e) {
+            return "Error writing to file: " + e.getMessage();
+        }
+    }
+}
+```
+
+单元测试：
+
+```java
+@SpringBootTest
+public class FileOperationToolTest {
+    @Test
+    public void testReadFile() {
+        FileOperationTool tool = new FileOperationTool();
+        String fileName = "读文件.txt";
+        String result = tool.readFile(fileName);
+        assertNotNull(result);
+    }
+
+    @Test
+    public void testWriteFile() {
+        FileOperationTool tool = new FileOperationTool();
+        String fileName = "读文件.txt";
+        String content = "Super idol 的笑容都没你的甜";
+        String result = tool.writeFile(fileName, content);
+        assertNotNull(result);
+    }
+}
+```
+
+#### 2）联网搜索
+
 
 
 
