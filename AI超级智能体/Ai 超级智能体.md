@@ -3500,6 +3500,171 @@ RAG评估流程包含四个步骤：
 
 ### Spring AI 工具开发
 
+我们通过Spring AI 提供的图片来理解在使用工具调用是时候帮我们做了什么？
+
+![image-20250620223212745](images/Ai 超级智能体/image-20250620223212745.png)
+
+1. 工具定义和注册：Spring AI可以通过简洁的注解自动生成工具定义和JSON schema，让Java方法轻松转变成AI调用的工具
+2. 工具调用请求：Spring AI 自动处理与AI 模型通信并解析工具调用请求，支持链式调用工具
+3. 工具执行：Spring AI 提供了统一的工具管理接口，自动根据AI返回的工具调用请求找到对应的工具并解析参数进行调用。
+4. 处理工具结果：Spring AI 内置结果转换和异常处理机制，支持各种复杂的Java对象作为返回值并优雅的处理错误情况
+5. 返回结果给模型：Spring AI 封装响应结果并管理上下文，确保工具执行结果正确传递给模型或直接返回给用户
+6. 生成最终响应：Spring AI 自动整合工具调用结果到对话上下文，支持多轮复杂交互，确保AI回复的连贯性和准确性
+
+#### 定义工具
+
+##### 工具定义模式
+
+定义工具的模式主要就两种：Methods 方法或Functions函数式编程。
+
+主要了解的就是Methods方式。
+
+| 特征           | Methods方式                            | Functions方式                      |
+| -------------- | -------------------------------------- | ---------------------------------- |
+| 定义方式       | @Tool和@ToolParam注解标注类方法        | 通过函数式接口通过@Bean定义        |
+| 语法复杂度     | 简单                                   | 复杂                               |
+| 支持的参数类型 | 大多数Java类型，基本类型、POJO、集合等 | 不支持基本类型、Optional、集合类型 |
+| 支持的返回类型 | 所有的可序列化类型，包括void           | 不支持基本类型、Optional、集合类型 |
+| 使用场景       | 适合大多数场景                         | 适合于现有函数式API集成            |
+| 注册方式       | 支持按需注册和全局注册                 | 配置类中预先定义                   |
+| 类型转换       | 自动处理                               | 手动配置                           |
+| 文档支持       | 注解提供描述                           | 通过Bean描述和JSON属性注解         |
+
+1）Methods模式：通过@Tool注解定义工具，通过tools方法绑定工具
+
+```java
+public class WeatherTools {
+    @Resource
+    @Tool(description = "Get current weather for the city")
+    public String getWeather(@ToolParam(description = "The city name") String city) {
+      return "Current weather in " + city + "is: sunny, 25℃";
+    }
+}
+```
+
+使用方式：
+
+```java
+ChatClient.create(dashscopeChatModel)
+        .prompt("What's the weather in Beijing?")
+        .tools(new WeatherTools())
+        .call();
+```
+
+2）Functions模式：通过`@Bean`注解定义工具，通过`functions`方法绑定工具
+
+```java
+@Configuration
+public class ToolConfig {
+    @Bean
+    @Description("Get current weather for a location")
+    public Function<WeatherRequest, WeatherResponse> weatherFunction() {
+        return request -> new WeatherResponse("Weather in " + request.getCity() + ": Sunny, 25°C");
+    }
+}
+
+// 使用方式
+ChatClient.create(chatModel)
+    .prompt("What's the weather in Beijing?")
+    .functions("weatherFunction")
+    .call();
+```
+
+##### 定义工具
+
+提供了两种定义工具的方法：**注解式**和**编程式**。
+
+1）注解式：只需要`@Tool`注解标记普通的Java方法，简单直观。
+
+每一个工具最好都添加清晰详细的描述，帮助AI理解何时应该调用这个工具。对于参数的话，最好使用`@ToolParam`注解提供额外的描述信息和是否必填(required = false/true)。
+
+实例代码：
+
+```java
+class WeatherTools {
+    @Tool(description = "获取指定城市的当前天气情况")
+    String getWeather(@ToolParam(description = "城市名称") String city) {
+        // 获取天气的实现逻辑
+        return "北京今天晴朗，气温25°C";
+    }
+}
+```
+
+2）编程式：如果想要在运行时动态创建工具，可以选择编程式来定义工具。
+
+先定义工具类：
+
+```java
+public class WeatherTools {
+    public String getWeather(String city) {
+        return "北京今天晴朗，气温35度";
+    }
+}
+```
+
+之后将工具类转成ToolCallback工具定义类，之后就可以将这个类绑定给ChatClient。
+
+```java
+        Method method = ReflectionUtils.findMethod(WeatherTools.class, "getWeather", String.class);
+        ToolCallback toolCallback = MethodToolCallback.builder()
+                .toolDefinition(ToolDefinitions.builder(method)
+                        .description("获取指定城市的天气信息")
+                        .build())
+                .toolMethod(method)
+                .toolObject(new WeatherTools())
+                .build();
+        ChatClient.create(dashscopeChatModel)
+                .prompt("What's the weather in Beijing?")
+                .tools(toolCallback)
+                .call();
+```
+
+其实编程式就是将注解式的那些参数拆分，通过调用方法设置了而已。
+
+#### 使用工具
+
+1）按需使用：直接在构建ChatClient请求时通过`tools()`方法附加工具，这种方式只适合特定的对话中使用某一些工具的场景
+
+```java
+String response = ChatClient.create(chatModel)
+  .prompt("北京今天的天气怎么样？")
+  .tools(new WeatherTools())
+  .call()
+  .content();
+```
+
+2）全局使用：如果某一些工具需要再素有对话中可用，可在构建ChatClient时注册默认工具。
+
+```java
+ChatClient chatClient = ChatClient.builder(chatModel)
+  .defaultTools(new WeatherTools(), new TimeTools()) // 注册默认工具
+  .build();
+```
+
+3）更加底层的使用方式：除了给ChatClient绑定工具之外，也可以给底层的ChatModel绑定工具，适合更加精细的场景。
+
+```java
+ // 得到工具对象
+        ToolCallback[] weatherTools = ToolCallbacks.from(new WeatherTools());
+        // 绑定工具到对象
+        ChatOptions chatOptions = ToolCallingChatOptions.builder()
+                .toolCallbacks(weatherTools)
+                .build();
+        // 构造Prompt指定对话选项
+        Prompt prompt = new Prompt("今天北京天气怎么样？", chatOptions);
+        dashscopeChatModel.call(prompt);
+```
+
+4）动态解析：对于更加复杂的场景，SpringAI还支持`ToolCallbackResolver`在运行时动态解析的工具，这种方式很适合需要根据上下文动态确定的场景。比如从数据库中根据工具名称搜索要调用的工具。
+
+#### 工具生态
+
+工具本身就是一种插件，能不自己写就不自己写，[github开源工具源码](https://github.com/alibaba/spring-ai-alibaba/tree/main/community/tool-calls)。包括了翻译、网页搜索、爬虫工具、地图工具等
+
+![image-20250620232943976](images/Ai 超级智能体/image-20250620232943976.png)
+
+
+
 
 
 
