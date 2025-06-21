@@ -3858,9 +3858,378 @@ public class WebSearchToolTest {
 
 实际应用中，只需要选择需要的信息即可。
 
+#### 3）网页抓取
 
+网页抓取的作用是根据网址解析到网页的内容。
 
+1. 使用Jsoup库实现网页内容的抓取，添加依赖
 
+```java
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.19.1</version>
+        </dependency>
+```
+
+2. 实现工具类
+
+```java
+public class WebScrapingTool {
+    /**
+     * 网页抓取
+     * @param url
+     * @return
+     */
+    @Tool(description = "Scrape the content of the web page")
+    public String scrapeWebPage(@ToolParam(description = "URL of the page to scrape") String url) {
+        try {
+            Document doc = Jsoup.connect(url).get();
+            return doc.html();
+        } catch (IOException e) {
+            return "Error scraping web page" + e.getMessage();
+        }
+    }
+}
+```
+
+3. 编写单元测试代码
+
+```java
+public class WebScrapingToolTest {
+    @Test
+    public void testScrapeWebPage() {
+        WebScrapingTool webScrapingTool = new WebScrapingTool();
+        String url = "https://www.codefather.cn";
+        String result = webScrapingTool.scrapeWebPage(url);
+        assertNotNull(result);
+    }
+}
+```
+
+4. 效果如图
+
+![image-20250621093952661](Ai 超级智能体/image-20250621093952661.png)
+
+#### 4）终端操作
+
+终端操作工具是在终端执行命令，比如执行Python命令来运行脚本。
+
+1. 通过Java的Process API 实现终端命令执行，Windows和其他操作系统实现略有不同。
+
+```java
+public class TerminalOperationTool {
+    /**
+     * 执行终端命令
+     * @param command
+     * @return
+     */
+    @Tool(description = "Execute a command in the terminal")
+    public String executeTerminalCommand(@ToolParam(description = "Command to execute in the terminal") String command) throws IOException, InterruptedException {
+        StringBuilder output = new StringBuilder();
+        Process process = Runtime.getRuntime().exec(command);
+        try(BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+        }
+
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            output.append("Command execution failed with exit code:").append(exitCode);
+        }
+        return output.toString();
+    }
+}
+```
+
+如果是Windows系统的话，操作略有不同，
+
+```java
+public class TerminalForWindowsOperationTool {
+    @Tool(description = "Execute a command in the terminal")
+    public String executeTerminalCommand(@ToolParam(description = "Command to execute in the terminal") String command) {
+        StringBuilder output = new StringBuilder();
+        try {
+            ProcessBuilder builder = new ProcessBuilder("cmd.exe", "/c", command);
+            Process process = builder.start();
+            try(BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                output.append("Command execution failed with exit code:").append(exitCode);
+            }
+        } catch (Exception e) {
+            output.append("Error executing command:").append(e.getMessage());
+        }
+
+        return output.toString();
+    }
+}
+```
+
+2. 编写单元测试代码
+
+```java
+@SpringBootTest
+class TerminalForWindowsOperationToolTest {
+
+    @Test
+    void executeTerminalCommand() {
+        TerminalForWindowsOperationTool tool = new TerminalForWindowsOperationTool();
+        String command = "dir";
+        String result = tool.executeTerminalCommand(command);
+        assertNotNull(result);
+    }
+}
+```
+
+效果：
+
+![image-20250621104506933](Ai 超级智能体/image-20250621104506933.png)
+
+> 由于Windows默认的编码格式是GBK，在`new InputStreamReader(process.getInputStream)`中需要加上GBK编码：`new InputStreamReader(process.getInputStream, "GBK")`。如果是Linux或者Unix的话是UTF8，Mac是UTF8。
+
+#### 5）资源下载
+
+资源下载工具是通过链接下载到本地。
+
+1. 使用HuTool的`HttpUtil.downloadFile`方法实现资源下载，工具类如下：
+
+   ```java
+   public class ResourceDownloadTool {
+       /**
+        * 下载资源
+        * @return
+        */
+       @Tool(description = "Download a resource from a given URL")
+       public String downloadResource(@ToolParam(description = "URL for the resource to download") String url,
+                                      @ToolParam(description = "Name of the save the download resource") String fileName) {
+           String fileDir = FileConstant.FILE_SAVE_PATH + "/download";
+           String filePath = fileDir + "/" + fileName;
+           try {
+               // 创建目录
+               FileUtil.mkdir(fileDir);
+               // 使用HuTool的downloadFile方法下载资源
+               HttpUtil.downloadFile(url, new File(filePath));
+               return "Resource download successfully to:" + filePath;
+           } catch (Exception e) {
+               return "Error downloading resource: " + e.getMessage();
+           }
+       }
+   }
+   ```
+
+2. 编写单元测试代码
+
+   ```java
+   @SpringBootTest
+   class ResourceDownloadToolTest {
+   
+       @Test
+       void downloadResource() {
+           ResourceDownloadTool tool = new ResourceDownloadTool();
+           String url = "http://gips3.baidu.com/it/u=119870705,2790914505&fm=3028&app=3028&f=JPEG&fmt=auto?w=1280&h=720";
+           String fileName = "logo.png";
+           String result = tool.downloadResource(url, fileName);
+           assertNotNull(result);
+       }
+   }
+   ```
+
+3. 效果
+
+   ![image-20250621110049732](Ai 超级智能体/image-20250621110049732.png)
+
+   ![image-20250621110104530](Ai 超级智能体/image-20250621110104530.png)
+
+#### 6）PDF生成
+
+   PDF生成工具是根据文件名和内容生成PDF文档并保存。
+
+   可以使用[itext库](https://github.com/itext/itext-java)实现PDF生成，需要注意的是，itext对中文的支持需要额外配置。不同操作系统提供的字体也各不相同，要做生产级工程，建议自行下载字体。
+
+1. 添加依赖
+
+   ```xml
+           <!-- https://mvnrepository.com/artifact/com.itextpdf/itext-core -->
+           <dependency>
+               <groupId>com.itextpdf</groupId>
+               <artifactId>itext-core</artifactId>
+               <version>9.1.0</version>
+               <type>pom</type>
+           </dependency>
+           <!-- https://mvnrepository.com/artifact/com.itextpdf/font-asian -->
+           <dependency>
+               <groupId>com.itextpdf</groupId>
+               <artifactId>font-asian</artifactId>
+               <version>9.1.0</version>
+               <scope>test</scope>
+           </dependency>
+   ```
+
+2. 编写工具类实现代码
+
+   ```java
+   public class PDFGenerationTool {
+       @Tool(description = "Generate a pdf file with given content")
+       public String generatePDF(
+               @ToolParam(description = "Name of the file to save the generated PDF") String fileName,
+               @ToolParam(description = "Content to be included in the PDF") String content) {
+           String fileDir = FileConstant.FILE_SAVE_PATH + "/pdf";
+           String filePath = fileDir + "/" + fileName;
+           try {
+               // 创建目录
+               FileUtil.mkdir(fileDir);
+               // 创建PdfWriter 和 PdfDocument对象
+               try(PdfWriter writer = new PdfWriter(filePath);
+                   PdfDocument pdfDocument = new PdfDocument(writer);
+                   Document document = new Document(pdfDocument)) {
+   
+   
+                   // 自定义字体
+   //                String fontPath = Paths.get("src/main/resource/static/fonts/simsun.ttf")
+   //                        .toAbsolutePath().toString();
+   //                PdfFont font = PdfFontFactory.createFont("STSongStd-Light", "UniGB-UCS2-H");
+                   // 使用内置字体
+                   PdfFont font = PdfFontFactory.createFont("STSongStd-Light", "UniGB-UCS2-H");
+                   document.setFont(font);
+   
+                   // 创建段落
+                   Paragraph paragraph = new Paragraph(content);
+   
+                   // 添加段落并关闭文档
+                   document.add(paragraph);
+               }
+               return "PDF generated successfully to:" + filePath;
+           } catch (Exception e) {
+               return "Error generating PDF:" + e.getMessage();
+           }
+   
+       }
+   }
+   ```
+
+   上述代码中，为了实现方便，直接保存PDF到本地文件系统。或者可以将文件保存到文件存储系统中，返回一个可访问的URL给AI输出，或者将本地的文件返回前端，用户直接访问。
+
+3. 单元测试
+
+   ```java
+   @SpringBootTest
+   class PDFGenerationToolTest {
+   
+       @Test
+       void generatePDF() {
+           PDFGenerationTool tool = new PDFGenerationTool();
+           String fileName = "哈哈.pdf";
+           String content = "《红楼梦》是由中央电视台、中国电视剧制作中心出品，王扶林执导， 曹雪芹原著 [8]，周雷、周岭、刘耕路编剧，欧阳奋强、陈晓旭、张莉、邓婕、孙梦泉、李志新、杨俊勇、吴晓东、王羊、战爱霞等主演的古装电视剧。 [11] [36]\n" +
+                   "该剧改编自中国古典文学名著《红楼梦》，以贾宝玉与薛宝钗、林黛玉的爱情婚姻悲剧为主线，讲述了贾、薛、王、史四大家族兴衰的过程，折射出世间百态、各人物的故事 [1] [5\n" +
+                   "]。\n" +
+                   "1987年春节期间在中央台试播前6集 [25]，同年5月2日起，正式播出全剧 [6]。本剧播出后，得到了大众的一致好评，被誉为“中国电视史上的绝妙篇章”和“不可逾越的经典” [9]。1986年，该剧获得第7届中国电视剧飞天奖特等奖 [23]；1987年，获得第五届中国电视金鹰奖优秀连续剧奖 [22]。";
+           String result = tool.generatePDF(fileName, content);
+           assertNotNull(result);
+       }
+   }
+   ```
+
+效果：![image-20250621114323455](Ai 超级智能体/image-20250621114323455.png)
+
+#### 集中注册
+
+   结合我们的需求，可以给AI一次性提供左右工具，自己决定何时调用，创建工具注册类。方便统一管理所有工具。
+
+   ```java
+   @Configuration
+   public class ToolRegistration {
+       @Value("${search-api.api-key}")
+       private String searchApiKey;
+       @Bean
+       public ToolCallback[] allTools() {
+           FileOperationTool fileOperationTool = new FileOperationTool();
+           WebSearchTool webSearchTool = new WebSearchTool(searchApiKey);
+           WebScrapingTool webScrapingTool = new WebScrapingTool();
+           ResourceDownloadTool resourceDownloadTool = new ResourceDownloadTool();
+           TerminalForWindowsOperationTool terminalOperationTool = new TerminalForWindowsOperationTool();
+           PDFGenerationTool pdfGenerationTool = new PDFGenerationTool();
+           return ToolCallbacks.from(
+                   fileOperationTool,
+                   webSearchTool,
+                   webScrapingTool,
+                   resourceDownloadTool,
+                   terminalOperationTool,
+                   pdfGenerationTool
+           );
+       }
+   }
+   ```
+
+   > 这一段代码中存在着大大的玄机。
+   >
+   > 1. 工厂模式：allTools()方法作为一个工厂方法，负责创建和配置多个工具实例，之后将他们包装成统一的数组返回。这符合工厂模式核心思想 - 集中创建对象并隐藏创建细节。
+   > 2. 依赖注入模式：通过`@Value`注解注入配置值，以及将创建好的工具通过Spring容器注入到需要他们的组件中。
+   > 3. 注册模式：该类作为一个中央注册点，集中管理和注册所有可用的工具，使他们能够被系统的其他部分统一访问。
+   > 4. 适配器模式：ToolCallback.from()方法可以看成一种适配器，它将各种不同的工具类转化成统一的ToolCallback数组，使系统能够以一致的方式处理他们
+
+#### 使用工具
+
+在`LoveApp`中添加调用的代码，通过tools方法绑定所有已注册的工具：
+
+```java
+    @Resource
+    private ToolCallback[] allTools;
+    public String doChatWithTools(String message, String chatId) {
+        ChatResponse response = chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, chatId)
+                        .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                // 开启日志
+                .advisors(new MyLoggerAdvisor())
+                .tools(allTools)
+                .call()
+                .chatResponse();
+        String content = response.getResult().getOutput().getText();
+        log.info("content: {}", content);
+        return content;
+    }
+```
+
+#### 测试使用工具
+
+最后，编写单元测试代码，通过特定的提示词精准的触发工具调用（AI的随机性会导致小概率失败）：
+
+```java
+    @Test
+    public void testChatWithTools() {
+        // 联网搜索
+        testMessage("周末我想去爬珠穆朗玛峰，推荐一下合适的路线，我不要装备，轻装上阵.列举出你搜索的信息所在的网址");
+        // 网页抓取
+        testMessage("最近身体出现情况了，请帮我在www.github.com上看看有没有解决方案");
+        // 资源下载
+        testMessage("下载一张适合作为手机壁纸的图片");
+        // 终端操作
+        testMessage("展示一下当前目录下的所有文件");
+        // 文件操作
+        testMessage("保存一个我的恋爱档案文档");
+        // PDF生成
+        testMessage("生成一份：‘清明约会计划’PDF，包含餐厅、活动流程和礼物清单");
+    }
+
+    private void testMessage(String message) {
+        String chatID = UUID.randomUUID().toString();
+        String answer = loveApp.doChatWithTools(message, chatID);
+        Assertions.assertNotNull(answer);
+    }
+```
+
+通过打断点的方式可以清楚看到最后的结果。（此处不做截图处理了）
+
+### 工具底层数据结构
 
 
 
