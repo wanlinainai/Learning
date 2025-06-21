@@ -4231,7 +4231,141 @@ class TerminalForWindowsOperationToolTest {
 
 ### 工具底层数据结构
 
+AI如何知道怎么调用工具？输出结果中应该包含哪一些参数来调用工具吗？
 
+Spring AI 工具调用核心在于`ToolCallback`接口，他是所有工具实现的基础。
 
+```java
+public interface ToolCallback {
 
+	/**
+	 * Definition used by the AI model to determine when and how to call the tool.
+	 */
+	ToolDefinition getToolDefinition();
+
+	/**
+	 * Metadata providing additional information on how to handle the tool.
+	 */
+	default ToolMetadata getToolMetadata() {
+		return ToolMetadata.builder().build();
+	}
+
+	/**
+	 * Execute tool with the given input and return the result to send back to the AI
+	 * model.
+	 */
+	String call(String toolInput);
+
+	/**
+	 * Execute tool with the given input and context, and return the result to send back
+	 * to the AI model.
+	 */
+	default String call(String toolInput, @Nullable ToolContext tooContext) {
+		if (tooContext != null && !tooContext.getContext().isEmpty()) {
+			throw new UnsupportedOperationException("Tool context is not supported!");
+		}
+		return call(toolInput);
+	}
+}
+```
+
+> - `getToolDefinition()`提供了工具的基本定义，包括名称、描述和调用参数，这些信息会传递给AI模型，帮助模型了解什么时候应该调用这个工具，以及如果构造参数。
+> - `getToolMetadata()`提供了处理工具的附加信息，是否直接返回结果等控制选项
+> - 两个`call()`方法是工具的执行入口，分别支持有无上下文的调用场景
+
+`ToolDefinition`结构如下：
+
+![image-20250621145525231](Ai 超级智能体/image-20250621145525231.png)
+
+可以通过构造器构造一个工具。
+
+接下来看看注解为什么可以直接将方法变成工具呢？
+
+1. `JsonSchemaGenerator`会解析方法签名和注解，自动生成符合JSON Schema规范的参数定义，作为ToolDefinition一部分提供给AI大模型
+2. `ToolCallResultConverter`负责将各种类型的方法返回值统一封装成字符串，便于AI模型处理
+3. `MethodToolCallback`实现了对注解方法的封装，使其符合`ToolCallback`接口规范
+
+这种设计使得我们可以专注于业务逻辑的实现，无需关心底层逻辑和参数转换的复杂细节。如若需要更加精细的控制，可以自定义`ToolCallResultConverter`来实现特定的转换逻辑。
+
+#### 工具上下文
+
+实际应用中，工具执行可能需要额外的上下文信息，比如用户登录信息、回话ID等。Spring AI通过`ToolContext`提供了这一个能力。
+
+![image-20250621151502845](Ai 超级智能体/image-20250621151502845.png)
+
+我们可以在调用AI模型中，传递上下文参数，比如传递用户名为zhangdebiao:
+
+```java
+String loginName = getLoginUserName();
+
+String response = chatClient
+    .prompt("帮我查询用户信息")
+    .tools(new CustomerTools())
+    .toolContext(Map.of("username", "zhangdebiao"))
+    .call()
+    .content();
+```
+
+在工具中使用上下文参数。比如从数据库中查询zhangdebiao的信息：
+
+```java
+class CustomerTools {
+    @Tool(description = "Retrive customer information")
+    Customer getCustomerInfo(Long id, ToolContext toolContext) {
+        return customerRepository.findById(id, toolContext.get("userName"));
+    }
+}
+```
+
+看源码我们会发现，`ToolContext`本质上是一个Map：
+
+![image-20250621153034404](Ai 超级智能体/image-20250621153034404.png)
+
+可以携带任何信息，但是这些信息不会传递给AI，只是工具内部使用。这样既增强了工具的安全性，也很灵活。
+
+- 用户认证信息：可以在上下文中传递用户token，不暴露给模型
+- 请求追踪：上下文中添加请求ID，便于日志追踪
+- 自定义配置：根据不同场景传递特定配置参数
+
+#### 立即返回
+
+有时，工具执行的任务不需要AI做返回了，而是希望直接返回给用户（比如生成PDF文档）。Spring AI 通过`returnDirect`属性支持这一功能，流程如图：
+
+![image-20250621154642648](Ai 超级智能体/image-20250621154642648.png)
+
+立即返回模式改变了工具调用的基本流程：
+
+1. 定义工具时，将`returnDirect`属性设置成`true`
+2. 当模型请求调用这个工具时，应用程序执行工具获取结果
+3. 结果直接返回给调用者
+
+使用方式：在注解中指定`returnDirect`参数
+
+```java
+class CustomerTools {
+    @Tool(description = "Retrieve customer information", returnDirect = true)
+    Customer getCustomerInfo(Long id) {
+        return customerRepository.findById(id);
+    }
+}
+```
+
+使用编程方式时，手动构造ToolMetadata对象：
+
+```java
+// 设置元数据包含 returnDirect 属性
+ToolMetadata toolMetadata = ToolMetadata.builder()
+    .returnDirect(true)
+    .build();
+
+Method method = ReflectionUtils.findMethod(CustomerTools.class, "getCustomerInfo", Long.class);
+ToolCallback toolCallback = MethodToolCallback.builder()
+    .toolDefinition(ToolDefinition.builder(method)
+            .description("Retrieve customer information")
+            .build())
+    .toolMethod(method)
+    .toolObject(new CustomerTools())
+    .toolMetadata(toolMetadata)
+    .build();
+```
 
