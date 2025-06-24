@@ -4369,3 +4369,205 @@ ToolCallback toolCallback = MethodToolCallback.builder()
     .build();
 ```
 
+#### 工具底层执行原理
+
+Spring AI 提供了两种工具的执行模式：框架控制的工具执行和用户工具执行。这两种模式都离不开一个核心组件：`ToolCallingManager`。
+
+##### ToolCallingManager
+
+`ToolCallingManger`接口是**管理AI工具调用全过程**的核心组件，负责根据AI模型的响应执行对应的工具并返回执行结果给大模型。此外，它还支持异常处理，可以统一处理工具执行过程中的错误情况。
+
+![image-20250624143500287](Ai 超级智能体/image-20250624143500287.png)
+
+其中的2个核心方法：
+
+1. resolveToolDefinitions:从模型工具调用选项中解析工具定义。
+2. executeToolCalls：执行模型请求对应的工具调用。
+
+如果使用的是Spring AI 相关的Spring Boot Starter，会初始化一个`DefaultToolCallingManager`，![image-20250624144142056](Ai 超级智能体/image-20250624144142056.png)
+
+如果不想用默认的，也可以自定义ToolCallingmanager Bean。
+
+```java
+@Bean
+ToolCallingManager toolCallingManager() {
+    return ToolCallingManager.builder().build();
+}
+```
+
+`ToolCallingManager`怎么知道是否调用工具呢？
+
+```java
+private InternalToolExecutionResult executeToolCall(Prompt prompt, AssistantMessage assistantMessage,
+			ToolContext toolContext) {
+		List<FunctionCallback> toolCallbacks = List.of();
+		if (prompt.getOptions() instanceof ToolCallingChatOptions toolCallingChatOptions) {
+			toolCallbacks = toolCallingChatOptions.getToolCallbacks();
+		}
+		else if (prompt.getOptions() instanceof FunctionCallingOptions functionOptions) {
+			toolCallbacks = functionOptions.getFunctionCallbacks();
+		}
+
+		List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
+
+		Boolean returnDirect = null;
+
+		for (AssistantMessage.ToolCall toolCall : assistantMessage.getToolCalls()) {
+
+			logger.debug("Executing tool call: {}", toolCall.name());
+
+			String toolName = toolCall.name();
+			String toolInputArguments = toolCall.arguments();
+
+			FunctionCallback toolCallback = toolCallbacks.stream()
+				.filter(tool -> toolName.equals(tool.getName()))
+				.findFirst()
+				.orElseGet(() -> toolCallbackResolver.resolve(toolName));
+
+			if (toolCallback == null) {
+				throw new IllegalStateException("No ToolCallback found for tool name: " + toolName);
+			}
+
+			if (returnDirect == null && toolCallback instanceof ToolCallback callback) {
+				returnDirect = callback.getToolMetadata().returnDirect();
+			}
+			else if (toolCallback instanceof ToolCallback callback) {
+				returnDirect = returnDirect && callback.getToolMetadata().returnDirect();
+			}
+			else if (returnDirect == null) {
+				// This is a temporary solution to ensure backward compatibility with
+				// FunctionCallback.
+				// TODO: remove this block when FunctionCallback is removed.
+				returnDirect = false;
+			}
+
+			String toolResult;
+			try {
+				toolResult = toolCallback.call(toolInputArguments, toolContext);
+			}
+			catch (ToolExecutionException ex) {
+				toolResult = toolExecutionExceptionProcessor.process(ex);
+			}
+
+			toolResponses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, toolResult));
+		}
+
+		return new InternalToolExecutionResult(new ToolResponseMessage(toolResponses, Map.of()), returnDirect);
+	}
+```
+
+1. 根据`Prompt`中的选项获取工具回调（支持`ToolCallingChatOptions`和`FunctionCallingOptions`）
+2. 遍历`AssistantMessage`中的工具调用，逐一执行：
+   - 查找或解析工具回调
+   - 根据回调类型和元数据确定`returnDirect`
+   - 执行工具并处理可能的异常
+   - 收集执行结果
+3. 返回包含所有工具响应和`returnDirect`的结果对象
+
+##### 框架控制的工具执行
+
+这是默认的最简单的模式，由Spring AI 自动执行整个工具调用流程，所以我们一开始开发的时候基本上没写几行业务逻辑代码。
+
+在这种模式下：
+
+- 框架自动检测模型是否请求调用工具
+- 自动执行工具调用并获取结果
+- 自动将结果发送到模型
+- 管理整个对话流程直到获取到最终答案
+
+![image-20250624151408430](Ai 超级智能体/image-20250624151408430.png)
+
+`ToolCallingManager`起到了关键作用，由框架使用默认初始化的`DefaultToolCallingManager`来自动管理整个工具调用流程，适合绝大多数简单场景。
+
+##### 用户控制的工具执行
+
+对于更加精细的场景，Spring AI 提供了用户控制模式，可以通过设置`ToolCallingChatOptions`的`internalToolExecutionEnabled`属性为false来禁用内部工具执行。
+
+```java
+        // 创建工具调用管理器
+        ToolCallingManager toolCallingManager = DefaultToolCallingManager.builder().build();
+//         得到工具对象
+        ToolCallback[] weatherTools = ToolCallbacks.from(new WebSearchTool("*******"));
+//         绑定工具到对象
+        ChatOptions chatOptions = ToolCallingChatOptions.builder()
+                .toolCallbacks(weatherTools)
+                .internalToolExecutionEnabled(false) // 禁用内部工具执行
+                .build();
+//         构造Prompt指定对话选项
+        Prompt prompt = new Prompt("今天北京天气怎么样？", chatOptions);
+
+        // 发送请求给模型
+        ChatResponse chatResponse = dashscopeChatModel.call(prompt);
+        // 手动处理工具调用
+        while (chatResponse.hasToolCalls()) {
+            ToolExecutionResult toolExecutionResult = toolCallingManager.executeToolCalls(prompt, chatResponse);
+            // 创建包含工具调用的新提示
+            prompt = new Prompt(toolExecutionResult.conversationHistory(), chatOptions);
+            // 再次发送请求
+            chatResponse = dashscopeChatModel.call(prompt);
+        }
+```
+
+- 在工具执行前后插入自定义逻辑
+- 实现更加复杂的工具调用链和条件逻辑
+- 和其他系统集成，比如追踪AI调用进度、记录日志等
+- 实现更加精细的错误处理和重试机制
+
+查看[官方案例](https://docs.spring.io/spring-ai/reference/api/tools.html#_user_controlled_tool_execution)。
+
+##### 异常处理
+
+工具执行过程中可能会产生各种异常，Spring AI提供了灵活的异常处理机制，通过`ToolExceptionProcessor`接口实现。
+
+```java
+@FunctionalInterface
+public interface ToolExecutionExceptionProcessor {
+    /**
+     * 将工具抛出的异常转换为发送给 AI 模型的字符串，或者抛出一个新异常由调用者处理
+     */
+    String process(ToolExecutionException exception);
+}
+```
+
+`DefaultToolExecutionExceptionProcessor`是默认实现类，提供了两种处理策略：
+
+1. `alwaysThrow`参数是false：将异常信息作为错误信息重新返回给AI模型，允许模型根据错误信息进行调整。
+2. `alwaysThrow`参数是true：直接将异常信息抛出给调用端
+
+![image-20250624161740687](Ai 超级智能体/image-20250624161740687.png)
+
+Spring Boot Starter自动注入的默认的DefaultToolExecutionExceptionProcessor默认使用的是false。**ToolCallingAutoConfiguration**
+
+![image-20250624161853870](Ai 超级智能体/image-20250624161853870.png)
+
+可以进行覆盖重写：
+
+```java
+@Configuration
+public class ToolCallingConfiguration {
+
+    @Bean
+    public ToolExecutionExceptionProcessor toolExecutionExceptionProcessor() {
+        return new DefaultToolExecutionExceptionProcessor(true);
+    }
+}
+```
+
+还可以自定义异常逻辑处理器来实现更多的复杂策略，比如根据异常类型来决定是返回错误还是抛出异常，实现重试逻辑。
+
+```java
+    // 重写异常处理逻辑
+    @Bean
+    public ToolExecutionExceptionProcessor customExceptionProcessor(){
+        return exception -> {
+            if (exception.getCause() instanceof IOException) {
+                return "An file process error occurred while processing the request: " + exception.getCause().getMessage();
+            } else {
+                throw exception;
+            }
+        };
+    }
+```
+
+
+
