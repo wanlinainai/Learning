@@ -4517,7 +4517,7 @@ private InternalToolExecutionResult executeToolCall(Prompt prompt, AssistantMess
 
 ##### 异常处理
 
-工具执行过程中可能会产生各种异常，Spring AI提供了灵活的异常处理机制，通过`ToolExceptionProcessor`接口实现。
+工具执行过程中可能会产生各种异常，Spring AI提供了灵活的异常处理机制，通过`ToolExecutionExceptionProcessor`接口实现。
 
 ```java
 @FunctionalInterface
@@ -4568,6 +4568,95 @@ public class ToolCallingConfiguration {
         };
     }
 ```
+
+#### 工具解析
+
+除了直接提供`ToolCallback`实例之外，Spring AI  还支持通过名称动态解析工具，这是通过`ToolCallbackResolver`接口实现的。
+
+```java
+public interface ToolCallbackResolver {
+    /**
+     * 根据给定的工具名称解析对应的ToolCallback
+     */
+    @Nullable
+    ToolCallback resolve(String toolName);
+}
+```
+
+Spring AI 默认使用`DelegatingToolCallbackResolver`，可以将一系列的任务委托给一系列的解析器：
+
+![image-20250626163640224](Ai 超级智能体/image-20250626163640224.png)
+
+- `SpringBeanToolCallbackResolver`：提供的是从Spring容器中寻找需要的工具。
+- `StaticToolCallbackResolver`：从预先注册的ToolCallback工具列表中查找。当使用Spring Boot 自动装配时，该解析器会自动配置应用上下文中定义的所有`ToolCallback`类型的Bean。
+
+```java
+ String response = ChatClient.create(chatModel)
+                .prompt()
+                .tools("WeatherTool", "TimeTool") // 提供名称
+                .call()
+                .content();
+```
+
+如果需要自定义解析逻辑，可以提供自己的`ToolCallbackResolver`Bean：
+
+```java
+    @Bean
+    public ToolCallbackResolver toolCallbackResolver() {
+        HashMap<String, ToolCallback> toolMap = new HashMap<>();
+        toolMap.put("weatherTool", new WeatherToolCallback());
+        toolMap.put("timeTool", new TimeToolCallback());
+
+        return toolName -> toolMap.get(toolName);
+    }
+```
+
+或者更常见的情况是扩展现有的解析器：
+
+```java
+@Bean
+ToolCallbackResolver toolCallbackResolver(List<ToolCallback> toolCallbacks) {
+    // 使用静态解析器管理所有工具
+    StaticToolCallbackResolver staticResolver = new StaticToolCallbackResolver(toolCallbacks);
+    // 添加自定义解析逻辑
+    ToolCallbackResolver = toolName -> {
+        if (toolName.startsWith("dynamic-")) {
+            // 动态创建工具实例
+            return createDynamicTool(toolName.substring(8));
+        }
+        return null;
+    }
+    
+    // 组合多个解析器
+    return new DelegatingToolCallbackResolver(List.of(customResolver, staticResolver));
+}
+```
+
+#### 可观测性
+
+目前的 Spring AI 工具调用可观测性仍然在开发中，。。。。。。。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
