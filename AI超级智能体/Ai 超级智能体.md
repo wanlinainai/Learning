@@ -4709,6 +4709,110 @@ MCP Server也是整个MCP架构的关键组件，主要用来为客户端提供�
 
 这种设计方式使得客户端和服务端完全解耦，任何语言开发的客户端都可以调用MCP服务。
 
+![image-20250627102330519](Ai 超级智能体/image-20250627102330519.png)
+
+#### MCP核心概念
+
+MCP的核心概念总共有6个。
+
+1. [Resources资源](https://modelcontextprotocol.io/docs/concepts/resources#resources)：让服务端向客户端提供各种数据，比如文本、文件、数据库记录、API响应等，客户端可以决定什么时候使用这些资源。
+2. [Prompts提示词](https://modelcontextprotocol.io/docs/concepts/prompts)：服务端可以定义可重复的提示词模板和工作流，供客户端和用户直接使用。它的作用是标准化常见的AI交互模式，比如能作为UI元素呈现给用户，简化用户和LLM交互过程。
+3. [Tools工具](https://modelcontextprotocol.io/docs/concepts/tools)：MCP中最实用的功能，服务端可以提供给客户端可调用的函数，使AI模型能够执行计算、查询信息或外部系统交互，扩展AI的能力范围。
+4. [Sampling采样](https://modelcontextprotocol.io/docs/concepts/sampling)：允许服务端通过客户端向大模型发送生成内容的请求（反向请求），MCP服务能够实现复杂的智能代理行为，同时保持用户对整个过程的控制和数据隐私保护。
+5. [Transports传输](https://modelcontextprotocol.io/docs/concepts/transports)：定义客户端和服务端之间的通信方式，包括Stdio（本地进程通信）和SSE（网络实时通信），确保不同环境下的可靠信息交换。
+6. [Roots根目录](https://modelcontextprotocol.io/docs/concepts/roots)：MCP协议的安全机制，定义了服务器可以访问的文件系统位置，限制访问范围，为MCP提供安全边界，防止恶意文件的访问。
+
+如若要开发MCP服务，需要关注3个概念，
+
+![image-20250627103721427](Ai 超级智能体/image-20250627103721427.png)
+
+[MCP官方文档](https://modelcontextprotocol.io/clients)，大多数客户端只能支持Tools工具调用的能力：
+
+![image-20250627103917524](Ai 超级智能体/image-20250627103917524.png)
+
+### 使用MCP
+
+主要要实现的是有三种MCP的方式：
+
+- 云平台使用MCP
+- 软件客户端使用MCP
+- 程序中使用MCP
+
+无论选择哪一种方式，原理都是类似的，有两种可选的使用模式：**本地下载MCP服务端代码运行**，或者**直接使用已部署的MCP服务**。
+
+#### MCP服务大全
+
+- [MCP.so](https:www.mcp.so)：提供丰富的MCP服务目录
+- [GitHub Awesome MCP Sersers](https://github.com/punkpeye/awesome-mcp-servers)：开源的MCP服务汇集平台
+- [阿里云百炼](https://bailian.console.aliyun.com/?tab=mcp#/mcp-market)
+- [Spring AI Alibaba的MCP服务市场](https://java2ai.com/mcp/)
+
+一般来说，绝大多数的MCP服务市场只能提供本地下载MCP服务端代码并运行的使用方式，毕竟部署也需要花钱。
+
+#### 云平台使用MCP
+
+参考[阿里云百炼](https://help.aliyun.com/zh/model-studio/mcp-introduction)介绍，我们可以直接使用官方预知的MCP服务，或者部署在自己的MCP服务到阿里云平台上。
+
+我们随便选择一个地图的智能体应用，![image-20250627110136482](Ai 超级智能体/image-20250627110136482.png)
+
+直接输入Prompt：**请帮我规划出从青岛北站到章丘北站的三条路线。**
+
+![image-20250627110257709](Ai 超级智能体/image-20250627110257709.png)
+
+![image-20250627110330949](Ai 超级智能体/image-20250627110330949.png)
+
+发现AI调用了工具，给出了不错的回答。
+
+#### 软件客户端使用MCP
+
+不同的客户端对MCP的支持程度不同，可以在[官方文档](https://modelcontextprotocol.io/clients)查看各个客户端支持的属性。
+
+我们以Cursor为例，如何使用MCP？由于没有现成的MCP服务器，我们选择本地运行的方式。
+
+##### 环境准备
+
+我们在[市场](https://mcp.so/)找到对应的MCP服务，我们使用的是高德地图的MCP，发现Server Config中是使用`npx`来安装和运行服务端代码的。
+
+![image-20250627115322090](Ai 超级智能体/image-20250627115322090.png)
+
+大多数的MCP服务都是支持基于NPX工具运行，推荐安装Node和NPX。
+
+去官网申请对应地图服务所需的[API Key](https://console.amap.com/dev/key/app)。
+
+##### Cursor接入MCP
+
+在Cursor设置中MCP服务：
+
+![image-20250627115533142](Ai 超级智能体/image-20250627115533142.png)
+
+将服务市场的MCP Server Config复制过来，注意要将API Key换成自己的。
+
+> 注意：此处建议使用远程的HTTP连接：
+>
+> ```shell
+> {
+>   "mcpServers": {
+>     "amap-amap-sse": {
+>       "url": "https://mcp.amap.com/sse?key=您在高德官网上申请的key"
+>     }
+>   }
+> }
+> ```
+>
+> 
+
+保存配置，会发现已经出现15 Tools enabled，![image-20250627115640904](Ai 超级智能体/image-20250627115640904.png)
+
+##### 测试使用MCP
+
+我们海还是使用之前的：**请帮我规划出从青岛北站到章丘北站的三条路线。**
+
+查看效果:
+
+![image-20250627133446592](Ai 超级智能体/image-20250627133446592.png)
+
+> 有的时候，同一个接口可能会有多次调用情况，由此可能加剧我们的花费消耗。**尽量少用，除非有钱**
+
 
 
 
