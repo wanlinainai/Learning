@@ -4912,9 +4912,269 @@ MCP的核心概念总共有6个。
 
 ### Spring AI MCP开发模式
 
+#### MCP客户端开发
 
+客户端基本上是基于[Spring AI MCP Client Boot Starter](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html)，能够自动完成客户端的初始化、管理多个客户端实例、自动清理资源等。
 
+##### 1、引入依赖
 
+Spring AI 提供了两种客户端SDK，分别支持非响应式和响应式编程
+
+- `spring-ai-starter-mcp-client`：核心启动器，提供stdio和Http的SSE方式
+- `spring-ai-starter-mcp-client-webflux`：基于webFlux响应式的SSE传输实现
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-mcp-client-spring-boot-starter</artifactId>
+</dependency>
+```
+
+##### 2、配置连接
+
+引入依赖之后，需要配置与服务器连接，Spring AI支持两种配置方式：
+
+1. 直接写入配置文件，这种方式支持stdio和sse连接方式
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        enabled: true
+        name: my-mcp-client
+        version: 1.0.0
+        request-timeout: 30s
+        type: SYNC
+        sse:
+          connections:
+            server1:
+              url: http://localhost:8080
+        stdio:
+          connections:
+            server1:
+              command: /path/to/server
+              args:
+                - --port=8080
+              env:
+                API_KEY: your-api-key
+```
+
+> 更多配置参考：[官方文档](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html#_configuration_properties)
+
+2. 引用[Claude Desktop格式](https://modelcontextprotocol.io/quickstart/user)的JSON文件，目前只支持Stdio连接方式
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        stdio:
+          servers-configuration: classpath:mcp-servers.json
+```
+
+配置文件如下：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/username/Desktop",
+        "/Users/username/Downloads"
+      ]
+    }
+  }
+}
+```
+
+##### 3、使用服务
+
+启动项目时，Spring AI 会自动注入一些MCP相关的Bean。
+
+1）如果想要完全控制MCP客户端的行为，可以使用McpClient Bean，支持同步和异步：
+
+```java
+// 同步客户端
+@Autowired
+private List<McpSyncClient> mcpSyncClients;
+
+// 异步客户端
+@Autowired
+private List<McpAsyncClient> mcpAsyncClients;
+```
+
+查看McpSyncClient源码，发现有很多和MCP服务端交互的方法，比如获取工具信息、调用信息等。
+
+2）如果想要利用MCP服务提供的工具来增强AI的能力，可以使用自动注入的`ToolCallbackProvider`Bean ，从中获取到ToolCallback工具对象。
+
+```java
+// 和 Spring AI 的工具进行整合
+@Autowired
+private SyncMcpToolCallbackProvider toolCallbackProvider;
+ToolCallback[] toolCallbacks = toolCallbackProvider.getToolCallbacks();
+```
+
+然后绑定给ChatClient对象即可。
+
+```java
+ChatResponse response = chatClient
+        .prompt()
+        .user(message)
+        .tools(toolCallbackProvider)
+        .call()
+        .chatResponse();
+```
+
+##### 4、其他特性
+
+1）Spring AI 同时支持[同步和异步客户端类型](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html#_syncasync_client_types)，可以根据应用需求选择合适的模式，只需要更改配置即可
+
+```properties
+spring.ai.mcp.client.type=ASYNC
+```
+
+2）开发者还可以通过编写自定义的Client Bean来[定制客户端行为](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html#_client_customization)，设置请求超时时间、设置文件系统根目录的访问范围、自定义事件处理器、添加特定的日志处理逻辑。
+
+官方提供了示例代码：
+
+```java
+@Component
+public class CustomMcpSyncClientCustomizer implements McpSyncClientCustomizer {
+    @Override
+    public void customize(String serverConfigurationName, McpClient.SyncSpec spec) {
+        // 自定义请求超时配置
+        spec.requestTimeout(Duration.ofSeconds(30));
+        
+        // 设置此客户端可访问的根目录URI
+        spec.roots(roots);
+        
+        // 设置处理消息创建请求的自定义采样处理器
+        spec.sampling((CreateMessageRequest messageRequest) -> {
+            // 处理采样
+            CreateMessageResult result = ...
+            return result;
+        });
+
+        // 添加在可用工具变更时通知的消费者
+        spec.toolsChangeConsumer((List<McpSchema.Tool> tools) -> {
+            // 处理工具变更
+        });
+
+        // 添加在可用资源变更时通知的消费者
+        spec.resourcesChangeConsumer((List<McpSchema.Resource> resources) -> {
+            // 处理资源变更
+        });
+
+        // 添加在可用提示词变更时通知的消费者
+        spec.promptsChangeConsumer((List<McpSchema.Prompt> prompts) -> {
+            // 处理提示词变更
+        });
+
+        // 添加接收服务器日志消息时通知的消费者
+        spec.loggingConsumer((McpSchema.LoggingMessageNotification log) -> {
+            // 处理日志消息
+        });
+    }
+}
+```
+
+#### MCP服务端开发
+
+服务端开发主要基于[Spring AI MCP Server Boot Starter，能够自动化配置MCP服务端组件，使得开发者能够轻松创建MCP服务。
+
+##### 1、依赖
+
+Spring AI 提供了3种MCP服务端SDK，分别支持非响应式和响应式编程，可以根据需要选择对应依赖包：
+
+- `Spring-ai-starter-mcp-server`：提供stdio传输支持，不需要额外的web依赖。
+- `spring-ai-starter-mcp-server-webmvc`：提供了基于Spring MVC的SSE传输和可选的stdio传输
+- `spring-ai-starter-mcp-server-webflux`：提供基于Spring WebFlux响应式SSE传输和可选的Stdio传输
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-mcp-server-spring-boot-starter</artifactId>
+</dependency>
+```
+
+##### 2、配置服务
+
+如果开发stdio服务，配置如下：
+
+```yaml
+spring:
+	ai:
+		mcp:
+			server: 
+				name: stdio-mcp-server
+				version: 1.0.0
+				stdio: true
+				type: SYNC
+```
+
+开发SSE如下：
+
+```yaml
+# 使用 spring-ai-starter-mcp-server-webmvc
+spring:
+  ai:
+    mcp:
+      server:
+        name: webmvc-mcp-server
+        version: 1.0.0
+        type: SYNC # 同步
+        sse-message-endpoint: /mcp/message  # SSE 消息端点路径
+        sse-endpoint: /sse                  # SSE 端点路径
+```
+
+如果要开发响应的：
+
+```yaml
+# 使用 spring-ai-starter-mcp-server-webflux
+spring:
+  ai:
+    mcp:
+      server:
+        name: webflux-mcp-server
+        version: 1.0.0
+        type: ASYNC  # 异步
+        sse-message-endpoint: /mcp/messages # SSE 消息端点路径
+        sse-endpoint: /sse                  # SSE 端点路径
+```
+
+##### 3、开发服务
+
+开发过程与工具调用是类似的，使用`@Tool`注解，
+
+```java
+@Service
+public class WeatherService {
+    @Tool(description = "获取指定城市的天气信息")
+    public String getWeather(
+            @ToolParameter(description = "城市名称，如北京、上海") String cityName) {
+        // 实现天气查询逻辑
+        return "城市" + cityName + "的天气是晴天，温度22°C";
+    }
+}
+```
+
+在SpringBoot启动的时候注册一个`ToolCallbackProvider`即可。
+
+```java
+@SpringBootApplication
+public class McpServerApplication {
+    @Bean
+    public ToolCallbackProvider weatherTools(WeatherService weatherService) {
+        return MethodToolCallbackProvider.builder()
+                .toolObjects(weatherService)
+                .build();
+    }
+}
+```
 
 
 
