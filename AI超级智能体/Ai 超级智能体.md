@@ -4813,11 +4813,104 @@ MCP的核心概念总共有6个。
 
 > 有的时候，同一个接口可能会有多次调用情况，由此可能加剧我们的花费消耗。**尽量少用，除非有钱**
 
+#### 程序中使用MCP
 
+实现一个能够根据另一半的位置推荐约会地点的AI助手。
 
+1. 在[Maven中央仓库](https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-mcp-client-spring-boot-starter/1.0.0-M6)找到正确的依赖，引入到项目中
 
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-mcp-client-spring-boot-starter</artifactId>
+    <version>1.0.0-M6</version>
+</dependency>
+```
 
+2. 在resources目录下新建`mcp-servers.json`配置文件，定义需要用到的MCP服务
 
+```json
+{
+  "mcpServers": {
+    "amap-maps": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@amap/amap-maps-mcp-server"
+      ],
+      "env": {
+        "AMAP_MAPS_API_KEY": "api_key"
+      }
+    }
+  }
+}
+```
+
+![image-20250629232408164](images/Ai 超级智能体/image-20250629232408164.png)
+
+> 在Windows环境下，命令配置需要添加`.cmd`后缀（`npx.cmd`），否则会报错。
+
+3. 修改application.yml文件
+
+```yaml
+    mcp:
+      client:
+        stdio:
+          servers-configuration: classpath:mcp-servers.json
+```
+
+这样一来，MCP服务端启动的时候，会额外的启动一个子进程来运行MCP服务，从而实现调用。
+
+4. 修改`LoveApp`的代码，新增一个利用MCP完成对话的方法。通过自动注入的`ToolCallbackProvider`获取到配置中的定义的MCP服务提供的所有工具，并提供给ChatClient。
+
+```java
+    @Resource
+    private ToolCallbackProvider toolCallbackProvider;
+
+    /**
+     * AI调用MCP服务
+     */
+    public String doChatWithMcp(String message, String chatId) {
+        ChatResponse chatResponse = chatClient.prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
+                        .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                .advisors(new MyLoggerAdvisor())
+                .tools(toolCallbackProvider)
+                .call()
+                .chatResponse();
+        String content = chatResponse.getResult().getOutput().getText();
+        log.info("content: {}", content);
+        return content;
+    }
+```
+
+从这段代码中能够看到，**MCP调用的本质就是类似于工具调用**，并不是让AI服务器主动去调用MCP服务，而是告诉AI“MCP服务提供了那一些工具”，如果AI想要使用这些工具完成任务，就会告诉我们的后端程序，后端程序在执行工具后将结果返回AI，最后由AI总结回复。
+
+![image-20250629233243694](images/Ai 超级智能体/image-20250629233243694.png)
+
+5. 测试运行，编写单元测试代码：
+
+```java
+    @Test
+    void doChatWithMcp() {
+        String chatID = UUID.randomUUID().toString();
+        // 测试地图MCP
+        String message = "我的另一半在上海静安区，请帮我找到 5 公里内合适的约会地点";
+        String answer = loveApp.doChatWithMcp(message, chatID);
+        Assertions.assertNotNull(answer);
+    }
+```
+
+运行结果如下：
+
+![image-20250629233523962](images/Ai 超级智能体/image-20250629233523962.png)
+
+调用之后可以查看API Key的使用量，注意控制调用次数避免超出限额。
+
+![image-20250629233627975](images/Ai 超级智能体/image-20250629233627975.png)
+
+### Spring AI MCP开发模式
 
 
 
