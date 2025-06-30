@@ -5176,15 +5176,344 @@ public class McpServerApplication {
 }
 ```
 
+##### 4、其他特性
 
+我们还可以利用SDK 来开发MCP服务的多种特性，比如：
 
+1）提供工具
 
+支持两种方式：
 
+```java
+@Bean
+public ToolCallbackProvider myTools(...) {
+    List<ToolCallback> tools = ...
+    return ToolCallbackProvider.from(tools);
+}
 
+@Bean
+public List<McpServerFeatures.SyncToolSpecification> myTools(...) {
+    List<McpServerFeatures.SyncToolSpecification> tools = ...
+    return tools;
+}
+```
 
+2）资源管理
 
+```java
+@Bean
+public List<McpServerFeatures.SyncResourceSpecification> myResources(...) {
+    var systemInfoResource = new McpSchema.Resource(...);
+    var resourceSpecification = new McpServerFeatures.SyncResourceSpecification(systemInfoResource, (exchange, request) -> {
+        try {
+            var systemInfo = Map.of(...);
+            String jsonContent = new ObjectMapper().writeValueAsString(systemInfo);
+            return new McpSchema.ReadResourceResult(
+                    List.of(new McpSchema.TextResourceContents(request.uri(), "application/json", jsonContent)));
+        }
+        catch (Exception e) {
+            throw new RuntimeException("Failed to generate system info", e);
+        }
+    });
 
+    return List.of(resourceSpecification);
+}
+```
 
+3）提示词管理：可以向客户端提供模块化的提示词
+
+```java
+@Bean
+public List<McpServerFeatures.SyncPromptSpecification> myPrompts() {
+    var prompt = new McpSchema.Prompt("greeting", "A friendly greeting prompt",
+        List.of(new McpSchema.PromptArgument("name", "The name to greet", true)));
+
+    var promptSpecification = new McpServerFeatures.SyncPromptSpecification(prompt, (exchange, getPromptRequest) -> {
+        String nameArgument = (String) getPromptRequest.arguments().get("name");
+        if (nameArgument == null) { nameArgument = "friend"; }
+        var userMessage = new PromptMessage(Role.USER, new TextContent("Hello " + nameArgument + "! How can I assist you today?"));
+        return new GetPromptResult("A personalized greeting message", List.of(userMessage));
+    });
+
+    return List.of(promptSpecification);
+}
+```
+
+4）根目录变更处理：当客户端的根目录权限发生变化时，服务端可以接受通知
+
+```java
+@Bean
+public BiConsumer<McpSyncServerExchange, List<McpSchema.Root>> rootsChangeHandler() {
+    return (exchange, roots) -> {
+        logger.info("Registering root resources: {}", roots);
+    };
+}
+```
+
+仅做了解即可，通过这套标准，服务端能向客户端传递各种不同类型的信息（资源、工具、提示词等）。
+
+#### MCP工具类
+
+Spring AI还提供了一系列的[辅助MCP开发的工具类](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-helpers.html)，用于MCP和ToolCallback之间的互相转换。
+
+开发者可以直接将之前开发的工具转换成MCP服务，极大提高了代码的复用性。
+
+### MCP 开发实战-图片搜索服务
+
+#### MCP服务端开发
+
+可以使用[Pexels图片资源网站API](https://www.pexels.com/api/documentation/#photos-search)来构建图片搜索服务.
+
+1）首先在Pexels网站生成API Key：
+
+2）在项目根目录下新建一个模块，名称是image-search-mcp-server。
+
+建议在新的项目单独打开该模块，不要直接在原项目的子文件夹中操作，否则会出现路径上的 问题。
+
+3）引入必要的依赖，包括Lombok、HuTool工具库和Spring AI MCP服务端依赖。
+
+有Stdio、WebMVC SSE 和 WebFlux SSE三种服务端依赖可以选择，开发时只需要填写不同的配置，开发流程都一样。此处我们引入WebMVC：
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-mcp-server-webmvc-spring-boot-starter</artifactId>
+    <version>1.0.0-M6</version>
+</dependency>
+```
+
+引入这个依赖后，会自动注册SSE端点，供客户端使用。包括消息和SSE传输端点：
+
+![image-20250630172030153](Ai 超级智能体/image-20250630172030153.png)
+
+4）在Resources目录下编写服务端配置文件。我们编写两套配置方案，分别实现stdio 和SSE模式的传输。
+
+stdio配置文件`application.yml`（需要关闭web支持）
+
+```yaml
+spring:
+  ai:
+    mcp:
+      server:
+        name: yu-image-search-mcp-server
+        version: 0.0.1
+        type: SYNC
+        # stdio
+        stdio: true
+  # stdio
+  main:
+    web-application-type: none
+    banner-mode: off
+```
+
+SSE 配置文件`application-sse.yaml`（需关闭stdio模式）：
+
+```yaml
+spring:
+  ai:
+    mcp:
+      server:
+        name: yu-image-search-mcp-server
+        version: 0.0.1
+        type: SYNC
+        # sse
+        stdio: false
+```
+
+之后编写主配置文件`application.yml`文件，灵活的使用哪一套配置：
+
+```yaml
+spring:
+  application:
+    name: yu-image-search-mcp-server
+  profiles:
+    active: stdio
+server:
+  port: 8127
+```
+
+5）编写图片搜索服务类，在`tools`包下新建ImageSearchTool，使用`@Tool`注解标注方法，作为MCP服务提供的工具。
+
+```java
+@Service
+public class ImageSearchTool {
+
+    // 替换为你的 Pexels API 密钥（需从官网申请）
+    private static final String API_KEY = "你的 API Key";
+
+    // Pexels 常规搜索接口（请以文档为准）
+    private static final String API_URL = "https://api.pexels.com/v1/search";
+
+    @Tool(description = "search image from web")
+    public String searchImage(@ToolParam(description = "Search query keyword") String query) {
+        try {
+            return String.join(",", searchMediumImages(query));
+        } catch (Exception e) {
+            return "Error search image: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 搜索中等尺寸的图片列表
+     *
+     * @param query
+     * @return
+     */
+    public List<String> searchMediumImages(String query) {
+        // 设置请求头（包含API密钥）
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", API_KEY);
+
+        // 设置请求参数（仅包含query，可根据文档补充page、per_page等参数）
+        Map<String, Object> params = new HashMap<>();
+        params.put("query", query);
+
+        // 发送 GET 请求
+        String response = HttpUtil.createGet(API_URL)
+                .addHeaders(headers)
+                .form(params)
+                .execute()
+                .body();
+
+        // 解析响应JSON（假设响应结构包含"photos"数组，每个元素包含"medium"字段）
+        return JSONUtil.parseObj(response)
+                .getJSONArray("photos")
+                .stream()
+                .map(photoObj -> (JSONObject) photoObj)
+                .map(photoObj -> photoObj.getJSONObject("src"))
+                .map(photo -> photo.getStr("medium"))
+                .filter(StrUtil::isNotBlank)
+                .collect(Collectors.toList());
+    }
+}
+```
+
+编写对应的单元测试类，先来验证工具是否可用：
+
+```java
+@SpringBootTest
+class ImageSearchToolTest {
+
+    @Resource
+    private ImageSearchTool imageSearchTool;
+
+    @Test
+    void searchImage() {
+        String result = imageSearchTool.searchImage("computer");
+        Assertions.assertNotNull(result);
+    }
+}
+```
+
+测试结果如下：
+
+可以发现搜索到了很多图片。
+
+![image-20250630173012788](Ai 超级智能体/image-20250630173012788.png)
+
+6）在主类中通过定义`ToolCallbackProvider`Bean来注册工具：
+
+```java
+@SpringBootApplication
+public class YuImageSearchMcpServerApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(YuImageSearchMcpServerApplication.class, args);
+    }
+
+    @Bean
+    public ToolCallbackProvider imageSearchTools(ImageSearchTool imageSearchTool) {
+        return MethodToolCallbackProvider.builder()
+                .toolObjects(imageSearchTool)
+                .build();
+    }
+}
+```
+
+7）最后使用mvn打包，打出来的jar包之后会用到。
+
+#### 客户端开发
+
+1）先引入必要的MCP客户端依赖
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-mcp-client-spring-boot-starter</artifactId>
+    <version>1.0.0-M6</version>
+</dependency>
+```
+
+实际开发过程中需要按照WebFlux支持进行开发（如果需要的话）。
+
+2）测试stdio传输方式，在`mcp-servers.json`配置文件中新增MCP Server的配置，通过java命令执行我们刚刚打包好的jar包。代码如下：
+
+```json
+{
+    "mcpServers": {
+        "image-search-mcp-server": {
+            "command": "java",
+            "args": [
+                "-Dspring.ai.mcp.server.stdio=true",
+                "-Dspring.main.web-application-type=none",
+                "-Dlogging.pattern.console=",
+                "-jar",
+                "image-search-mcp-server/target/images-search-mcp-server-0.0.1-SNAPSHOT.jar"
+            ],
+            "env": {}
+        }
+    }
+}
+```
+
+3）测试运行，编写单元测试代码
+
+```java
+@Test
+void doChatWithMcp() {
+    // 测试图片搜索 MCP
+    String message = "帮我搜索一些哄另一半开心的图片";
+    String answer =  loveApp.doChatWithMcp(message, chatId);
+    Assertions.assertNotNull(answer);
+}
+```
+
+运行效果如图，通过Debug可以看到MCP 服务提供的工具被成功加载：
+
+![image-20250630185326643](Ai 超级智能体/image-20250630185326643.png)
+
+ 输出结果中会有很多的图片地址。
+
+4）测试SSE连接方式，首先修改MCP服务端的配置文件，激活SSE的配置：
+
+```yaml
+spring:
+  application:
+    name: yu-image-search-mcp-server
+  profiles:
+    active: sse
+server:
+  port: 8127
+```
+
+之后修改客户端配置文件，添加SSE配置，同时要注释原有的stdio配置避免端口冲突：
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        sse:
+          connections:
+            server1:
+              url: http://localhost:8127
+        # stdio:
+        # servers-configuration: classpath:mcp-servers.json
+```
+
+测试运行，发现MCP服务端代码被成功运行：
+
+![image-20250630185610037](Ai 超级智能体/image-20250630185610037.png)
 
 
 
