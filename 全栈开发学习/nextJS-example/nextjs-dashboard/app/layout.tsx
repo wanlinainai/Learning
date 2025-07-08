@@ -1,3 +1,6 @@
+import '@/app/ui/global.css';
+import {inter} from '@/app/ui/fonts'
+
 export default function RootLayout({
   children,
 }: {
@@ -5,7 +8,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      {/* 将Inter添加到body中，该字体会应用于整个应用程序 */}
+      <body className={`${inter.className} antialliased`}>{children}</body>
     </html>
   );
 }

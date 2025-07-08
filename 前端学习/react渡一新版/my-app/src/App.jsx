@@ -2,6 +2,7 @@ import React from "react";
 import Hello from './component/Hello'
 import World from "./component/World";
 import Button from "./component/Button";
+import Greeting from "./component/Greeting";
 
 // function App() {
 //   const name = "litaibai";
@@ -156,6 +157,9 @@ class App extends React.Component {
         <Hello stuInfo={this.state} num={false} changeStateHandle={this.changeStateHandle} />
         <World content="content内容" />
         <Button>添加按钮</Button>
+
+        {/* 条件渲染 --> 是否登录 */}
+        <Greeting isLoggedIn={true}/>
       </>
     )
   }
