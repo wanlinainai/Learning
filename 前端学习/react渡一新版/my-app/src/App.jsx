@@ -1,72 +1,45 @@
-import {React, useState, useEffect} from 'react';
-import useMyBook from './useMyBook';
+import { Routes, Route, Navigate, NavLink } from "react-router-dom";
+import Home from "./components/Home";
+import AddOrEdit from "./components/AddOrEdit";
+import About from "./components/About";
+import './css/App.css'
 
 function App() {
-
-  const {bookName, setBookName} = useMyBook();
-  const [value, setValue] = useState("");
-
-  // 初始值, set初始值
-  // let [count, setCount] = useState(0);
-  // let [count1, setCount1] = useState(0);
-  // let [count2, setCount2] = useState(0);
-  // let [count3, setCount3] = useState(0);
-
-  // useEffect(() => {
-  //   // document.title = `你点击了${count}次`
-  //   // const stopTimer = setInterval(() => {
-  //   //   console.log("Hello");
-  //   // }, 1000);
-
-  //   console.log('副作用函数执行了....');
-    
-  //   // 在这个useEffect中，返回一个函数，该函数就是清理函数
-  //   // return () => {
-  //   //   // console.log('清理函数执行了');
-  //   //   clearInterval(stopTimer)
-  //   // }
-
-
-  // }, []);
-
-  // 使用多变量
-  // let [age, setAge] = useState(42);
-  // const [fruit, setFruit] = useState('banana');
-  // const [todos, setTodos] = useState([{ text: '学习 Hook' }]);
-
-  // function clickHandle() {
-  //   // setCount(++count);
-  //   // setAge(++age);
-  //   // console.log('执行副作用函数');
-    
-  // }
-  
-
-  function changeHandle(e) {
-    setValue(e.target.value);
-  }
-
-  function clickHandle() {
-    setBookName(value)
-  }
-
   return (
-    <div>
-      {/* <div>count1：{count1}</div>
-      <div>count2：{count2}</div>
-      <div>count3：{count3}</div> */}
-      {/* <div>You clicked {count} times</div> */}
-      {/* <div>年龄：{age}</div>
-      <div>水果：{fruit}</div>
-      <div>计划：{todos[0].text}</div> */}
-      {/* <button onClick={clickHandle}>+ 1</button> */}
-      {/* <button onClick={() => {setCount1(++count1)}}>+1</button>
-      <button onClick={() => {setCount2(++count2)}}>+1</button>
-      <button onClick={() => {setCount3(++count3)}}>+1</button> */}
+    <div id="app" className="container">
+      {/* 导航栏 */}
+      <nav className="navbar navbar-inverse navbar-fixed-top">
+        <div className="container">
+          <div className="navbar-header">
+            <button type="button" className="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+              <span className="sr-only">Toggle navigation</span>
+              <span className="icon-bar"></span>
+              <span className="icon-bar"></span>
+              <span className="icon-bar"></span>
+            </button>
+            <a className="navbar-brand" href="#">学生管理系统</a>
+          </div>
+          <div id="navbar" className="collapse navbar-collapse">
+            <ul className="nav navbar-nav">
+              <NavLink to="/home" className='navigation'>主页</NavLink>
+              <NavLink to="/about" className='navigation'>关于我们</NavLink>
+            </ul>
+            <ul className="nav navbar-nav navbar-right">
+              <NavLink to="/add" className='navigation'>添加用户</NavLink>
+            </ul>
+          </div>
+        </div>
+      </nav>
 
-        <div>{bookName}</div>
-        <input type="text" value={value} onChange={changeHandle}/>
-        <button onClick={clickHandle}>确定</button>
+      {/* 匹配的路由所对应的组件 */}
+      <div className="content">
+        <Routes>
+          <Route path="/home" element={<Home />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/Add" element={<AddOrEdit />} />
+          <Route path="/" element={<Navigate replace to="/home" />} />
+        </Routes>
+      </div>
     </div>
   );
 }

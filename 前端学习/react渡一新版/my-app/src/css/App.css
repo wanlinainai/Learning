@@ -1,0 +1,23 @@
+.content {
+  margin-top: 100px;
+}
+
+.navigation {
+  line-height: 50px;
+  margin: 0 10px;
+  font-weight: 400;
+}
+
+a.active {
+  text-decoration: none;
+  color: #ccc;
+}
+
+.table {
+  margin-top: 40px;
+}
+
+tr,
+th {
+  text-align: center;
+}

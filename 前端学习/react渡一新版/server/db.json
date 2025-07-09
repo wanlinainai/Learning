@@ -1,8 +1,8 @@
 {
-  "stuents" : [
+  "students": [
     {
       "name": "Adolf Hitler",
-      "age" : "18",
+      "age": "18",
       "phone": "15112341234",
       "email": "hitler@163.com",
       "education": "硕士",
