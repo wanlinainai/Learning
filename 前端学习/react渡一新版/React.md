@@ -67,7 +67,141 @@ Hook就是JavaScript函数，但是使用的话会有两个额外的规则：
 
 React内置了一些实用的Hook，并且随着React版本的更新，Hook的数量还在持续的增加。
 
+- 基本使用
 
+```react
+import {React, useState} from 'react';
+
+function App(props) {
+
+  // 初始值, set初始值
+  let [count, setCount] = useState(0);
+
+  function clickHandle() {
+    setCount(++count);
+  }
+  
+
+  return (
+    <div>
+      <div>{count}</div>
+      <button onClick={clickHandle}>+ 1</button>
+    </div>
+  );
+}
+
+export default App;
+```
+
+- 声明多个state变量
+
+```react
+import {React, useState} from 'react';
+
+function App(props) {
+
+  // 初始值, set初始值
+  let [count, setCount] = useState(0);
+
+  // 使用多变量
+  let [age, setAge] = useState(42);
+  const [fruit, setFruit] = useState('banana');
+  const [todos, setTodos] = useState([{ text: '学习 Hook' }]);
+
+  function clickHandle() {
+    setCount(++count);
+    setAge(++age);
+  }
+  
+
+  return (
+    <div>
+      <div>{count}</div>
+      <div>年龄：{age}</div>
+      <div>水果：{fruit}</div>
+      <div>计划：{todos[0].text}</div>
+      <button onClick={clickHandle}>+ 1</button>
+    </div>
+  );
+}
+
+export default App;
+```
+
+useEffect
+
+- 副作用
+
+  - 纯函数：一个确切的参数在函数中运行之后，一定能够得到一个确切的值，例如下面的例子：
+
+  ```javascript
+  function test(x) {
+      return x * 2;
+  }
+  // 输入的如果是：2，得到的一定是4；输入的如果是3，得到的一定是6
+  ```
+
+  - 如果一个函数中存在副作用，那么我们就称该函数不是一个纯函数，所谓副作用，就是指的函数的结果不可控，不可预期。
+  - 常见的副作用有：发送网络请求、添加一些监听的注册和取消注册、手动修改**DOM**。
+
+- 基本使用
+
+- 执行清理工作
+
+- 副作用的依赖
+
+### 自定义Hook
+
+自定义Hook本质上就是函数，但是和普通函数还是有一些区别，主要体现在以下两个点：
+
+- 自定义Hook能够调用诸如useState、useRef等，普通函数不能调用。由此可以通过内置的Hooks获取到Fiber的访问方式，可以实现在组件级别存储数据的方案等。
+- 自定义Hooks需要以`use`开头，普通函数没有这个限制，这并非是一个强制的语法，而更像是一种约定
+
+**App.jsx**
+
+```react
+import {React, useState, useEffect} from 'react';
+import useMyBook from './useMyBook';
+
+function App() {
+
+  const {bookName, setBookName} = useMyBook();
+  const [value, setValue] = useState("");
+  function changeHandle(e) {
+    setValue(e.target.value);
+  }
+
+  function clickHandle() {
+    setBookName(value)
+  }
+
+  return (
+    <div>
+        <div>{bookName}</div>
+        <input type="text" value={value} onChange={changeHandle}/>
+        <button onClick={clickHandle}>确定</button>
+    </div>
+  );
+}
+
+export default App;
+```
+
+**useMyBook.jsx**
+
+```react
+import { useState } from "react";
+
+// 自定义Hook --> 使用了原有的useState这个Hook，这个也是一个Hook
+function useMyBook() {
+  const [bookName, setBookName] = useState("React learning...")
+  return {
+    bookName, setBookName
+  }
+}
+
+export default useMyBook;
+```
 
 
 
