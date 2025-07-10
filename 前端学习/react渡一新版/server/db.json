@@ -1,26 +1,15 @@
 {
   "students": [
     {
-      "name": "Adolf Hitler",
-      "age": "18",
-      "phone": "15112341234",
-      "email": "hitler@163.com",
-      "education": "硕士",
-      "graduationschool": "维也纳艺术学院",
-      "profession": "世界改造工程师",
-      "profile": "大家好!",
-      "id": 1
-    },
-    {
-      "name": "鲁迅",
-      "age": "21",
-      "phone": "13800000001",
+      "name": "鲁迅修改",
+      "age": "19",
+      "phone": "10086",
       "email": "luxun@literature.cn",
       "education": "博士",
       "graduationschool": "东京医学专门学校",
       "profession": "文学家、思想家",
-      "profile": "横眉冷对千夫指，俯首甘为孺子牛。",
-      "id": 1
+      "profile": "你好，我是弃医从文的鲁智深",
+      "id": "2"
     },
     {
       "name": "邓稼先",
@@ -31,7 +20,7 @@
       "graduationschool": "普渡大学",
       "profession": "核物理学家",
       "profile": "为中华之崛起而读书。",
-      "id": 2
+      "id": "3"
     },
     {
       "name": "钱学森",
@@ -42,7 +31,7 @@
       "graduationschool": "麻省理工学院",
       "profession": "航天工程专家",
       "profile": "我的事业在中国，我的成就在中国。",
-      "id": 3
+      "id": "4"
     },
     {
       "name": "杨振宁",
@@ -53,7 +42,7 @@
       "graduationschool": "芝加哥大学",
       "profession": "物理学家",
       "profile": "科学无国界，但科学家有祖国。",
-      "id": 4
+      "id": "5"
     },
     {
       "name": "林徽因",
@@ -64,7 +53,7 @@
       "graduationschool": "宾夕法尼亚大学",
       "profession": "建筑师、诗人",
       "profile": "你是人间的四月天。",
-      "id": 5
+      "id": "6"
     },
     {
       "name": "李白",
@@ -75,7 +64,18 @@
       "graduationschool": "蜀中私塾",
       "profession": "诗人",
       "profile": "天生我材必有用，千金散尽还复来。",
-      "id": 6
+      "id": "7"
+    },
+    {
+      "id": "1c94",
+      "name": "张德彪",
+      "age": "23",
+      "phone": "71343601491",
+      "email": "aa@qq.com",
+      "education": "高中或技校",
+      "graduationschool": "蓝翔职业技术学院",
+      "profession": "保安",
+      "profile": "中国保安队，扛起抢来就是兵！！"
     }
   ],
   "classes": [
