@@ -4,6 +4,7 @@ import AddOrEdit from "./components/AddOrEdit";
 import About from "./components/About";
 import Detail from "./components/Detail";
 import './css/App.css'
+import Router from './router/router'
 
 function App() {
   return (
@@ -34,14 +35,7 @@ function App() {
 
       {/* 匹配的路由所对应的组件 */}
       <div className="content">
-        <Routes>
-          <Route path="/home" element={<Home />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/Add" element={<AddOrEdit />} />
-          <Route path="/detail/:id" element={<Detail />} />
-          <Route path="/edit/:id" element={<AddOrEdit />} />
-          <Route path="/" element={<Navigate replace to="/home" />} />
-        </Routes>
+        <Router />
       </div>
     </div>
   );
