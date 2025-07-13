@@ -205,7 +205,36 @@ export default useMyBook;
 
 
 
+## Redux
 
+### 什么是状态管理？
+
+状态管理是**把组件之间需要共享的状态抽离出来，遵循一定的约定，统一来管理，让状态变化可以预测**
+
+- 需要将共享的状态提升到公共的父组件，若没有公共的父组件，往往需要自行构造。
+- 状态由父组件自上而下逐层传递，若组件层级很多，数据传递会变得很冗余。
+
+![image-20250711000107307](images/React/image-20250711000107307.png)
+
+需要将属性公共化。
+
+![image-20250711000213370](images/React/image-20250711000213370.png)
+
+### Redux核心思想
+
+早期的时候，React官方提供了Flux，Flux的特点：
+
+- 单向数据流。视图事件或者外部测试用例发出Action，经由Dispatcher派发给Store，Store会触发相关的方法更新数据、更新视图
+- Store可以有多个
+- Store不仅存放数据，还封装了处理数据的方法
+
+2015年的时候，Dan Abramov推出了Redux。Redux本质上就是在Flux上做了一些更新：
+
+- 单向数据流。View发出Action(`store.dispatch(action)`)，store调用了Reducer计算出新的state，若state产生变化，则调用监听函数重新渲染View（`store.subscribe(render)`）
+- 单一数据源。只有一个Store
+- state是只读的，每一次状态更新只能返回一个新的state
+- 没有Dispatcher，而是在Store中集成了dispatch方法，`store.dispatch()`是View发出Action的唯一途径
+- 支持使用中间件（Middleware）管理异步数据流
 
 
 
