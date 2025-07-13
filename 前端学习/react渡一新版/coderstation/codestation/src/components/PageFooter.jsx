@@ -38,7 +38,7 @@ function PageFooter(props) {
           骆昊的技术专栏
         </a>
       </p>
-      <p>© 2022 - Coder Station</p>
+      <p>© 2025 - Coder Station</p>
       <p>Powered by Create React App</p>
     </div>
   );
