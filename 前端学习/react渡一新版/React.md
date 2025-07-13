@@ -236,6 +236,13 @@ export default useMyBook;
 - 没有Dispatcher，而是在Store中集成了dispatch方法，`store.dispatch()`是View发出Action的唯一途径
 - 支持使用中间件（Middleware）管理异步数据流
 
+Redux是一个独立的状态管理库，有几个核心概念：
+
+1. Store：存储整个应用的状态
+2. State：应用程序的状态
+3. Action：一个包含了type属性的普通对象用于描述发生了什么。
+4. Reducer：一个函数，接收当前的state和一个Action，返回一个新的state
+
 
 
 
