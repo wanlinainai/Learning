@@ -1,6 +1,7 @@
 import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button } from 'antd';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import styles from '../css/LoginForm.module.css'
+import { getCaptcha } from '../api/user';
 
 function LoginForm(props) {
 
@@ -8,6 +9,13 @@ function LoginForm(props) {
   const [captcha, setCaptcha] = useState(null);
   const loginFormRef = useRef();
   const registerFormRef = useRef();
+
+  // 初始化时候调用
+  useEffect(() => {
+    captchaClickHandle()
+  }, [props.isShow]);
+
+
   function loginHandle() {
 
   }
@@ -17,6 +25,7 @@ function LoginForm(props) {
   function onChange(e) {
     // 修改value的值，达到单选框能够切换
     setValue(e.target.value)
+    captchaClickHandle()
   }
 
   // 登录表单的状态数据
@@ -47,6 +56,13 @@ function LoginForm(props) {
   function registerHandle() {
 
   }
+
+  // 异步请求验证码接口
+  async function captchaClickHandle() {
+    const result = await getCaptcha();
+    setCaptcha(result);
+  }
+
   if (value === 1) {
     // 登录面板的jsx
     container = (
