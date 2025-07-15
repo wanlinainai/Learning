@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import 'antd/dist/reset.css'; // ✅ 加在最前面
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
@@ -8,8 +9,6 @@ import zhCN from 'antd/es/locale/zh_CN';
 import { ConfigProvider } from 'antd';
 import store from './redux/store';
 import { Provider } from 'react-redux';
-import './index.css';
-
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

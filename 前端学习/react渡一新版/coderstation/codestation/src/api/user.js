@@ -21,3 +21,15 @@ export function userIsExist(loginId) {
     method: "GET",
   });
 }
+
+
+/**
+ * 用户注册
+ */
+export function addUser(newUserInfo) {
+  return request({
+    url: '/api/user',
+    data: newUserInfo,
+    method: "POST"
+  })
+}

@@ -1,14 +1,18 @@
-import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button } from 'antd';
+import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button, message } from 'antd';
 import { useRef, useState, useEffect } from 'react';
 import styles from '../css/LoginForm.module.css'
-import { getCaptcha, userIsExist } from '../api/user';
+import { getCaptcha, userIsExist, addUser } from '../api/user';
+import { initUserInfo, changeLoginStatus } from '../redux/userSlice';
+import { useDispatch } from 'react-redux';
 
 function LoginForm(props) {
 
   const [value, setValue] = useState(1)
   const [captcha, setCaptcha] = useState(null);
+  const [messageApi, contextHolder] = message.useMessage();
   const loginFormRef = useRef();
   const registerFormRef = useRef();
+  const dispatch = useDispatch();
 
   // 初始化时候调用
   useEffect(() => {
@@ -58,7 +62,56 @@ function LoginForm(props) {
     setInfo(obj);
   }
 
-  function registerHandle() {
+  /**
+   * 关闭弹框
+   */
+  function handleCancel() {
+    // 清空上一次的内容
+    setRegisterInfo({
+      loginId: "",
+      nickname: "",
+      captcha: ''
+    })
+
+    setLoginInfo({
+      loginId: "",
+      loginPwd: '',
+      captcha: '',
+      remember: false
+    })
+
+    // 关闭
+    props.closeModal();
+  }
+
+  /**
+   * 注册点击事件
+   */
+  async function registerHandle() {
+    const data = await addUser(registerInfo);
+    if (data.data) {
+      // 注册成功
+      messageApi.open({
+        type: 'success',
+        content: '用户注册成功，默认密码是 123456'
+      })
+      // 用户信息存储到数据仓库中
+      dispatch(initUserInfo(data.data))
+
+      // 将数据仓库的登录状态修改
+      dispatch(changeLoginStatus(true))
+
+      // 关闭登录的弹框
+      handleCancel()
+    } else {
+      // 失败
+      messageApi.open({
+        type: 'warning',
+        content: data.msg,
+      });
+
+      captchaClickHandle();
+    }
 
   }
 
@@ -72,16 +125,19 @@ function LoginForm(props) {
    * 检查用户登录id是否存在
    */
   async function checkLoginIdIsExist() {
-    console.log(registerInfo.loginId);
-    const data = await userIsExist(registerInfo.loginId)
-    console.log(data);
-
+    if (registerInfo.loginId) {
+      const { data } = await userIsExist(registerInfo.loginId)
+      if (data) {
+        return Promise.reject("该用户名已经被使用")
+      }
+    }
   }
 
   if (value === 1) {
     // 登录面板的jsx
     container = (
       <div className={styles.container}>
+        {contextHolder}
         <Form
           name="basic1"
           autoComplete="off"
@@ -188,6 +244,7 @@ function LoginForm(props) {
     // 注册面板的jsx
     container = (
       <div className={styles.container}>
+        {contextHolder}
         <Form
           name="basic2"
           autoComplete="off"
