@@ -1,7 +1,7 @@
 import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button } from 'antd';
 import { useRef, useState, useEffect } from 'react';
 import styles from '../css/LoginForm.module.css'
-import { getCaptcha } from '../api/user';
+import { getCaptcha, userIsExist } from '../api/user';
 
 function LoginForm(props) {
 
@@ -45,12 +45,17 @@ function LoginForm(props) {
 
   let container = null;
 
-  function updateInfo() {
-
-  }
-
-  function captchaClickHandle() {
-
+  /**
+   * 更新填入的数据
+   * @param {*} oldInfo 
+   * @param {*} newContent 
+   * @param {*} key 
+   * @param {*} setInfo 
+   */
+  function updateInfo(oldInfo, newContent, key, setInfo) {
+    const obj = { ...oldInfo };
+    obj[key] = newContent;
+    setInfo(obj);
   }
 
   function registerHandle() {
@@ -61,6 +66,16 @@ function LoginForm(props) {
   async function captchaClickHandle() {
     const result = await getCaptcha();
     setCaptcha(result);
+  }
+
+  /**
+   * 检查用户登录id是否存在
+   */
+  async function checkLoginIdIsExist() {
+    console.log(registerInfo.loginId);
+    const data = await userIsExist(registerInfo.loginId)
+    console.log(data);
+
   }
 
   if (value === 1) {
@@ -188,7 +203,7 @@ function LoginForm(props) {
                 message: "请输入账号，仅此项为必填项",
               },
               // 验证用户是否已经存在
-              // { validator: checkLoginIdIsExist },
+              { validator: checkLoginIdIsExist },
             ]}
             validateTrigger='onBlur'
           >
