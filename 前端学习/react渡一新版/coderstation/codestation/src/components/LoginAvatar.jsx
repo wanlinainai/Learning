@@ -25,7 +25,7 @@ function LoginAvatar(props) {
     loginStatus = (
       <Popover content={content} trigger="hover" placement='bottom'>
         <div className={styles.avatarContainer}> 
-          <Avatar src={<Image src={userInfo?.avatar}/>} preview={false} size='large' icon={<UserOutlined />} />
+          <Avatar src={<Image src={userInfo?.avatar} preview={false}/>} size='large' icon={<UserOutlined />} />
         </div>
       </Popover>
     )

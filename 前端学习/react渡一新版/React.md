@@ -279,7 +279,18 @@ src目录下新建一个setupProxy文件，在该文件中进行请求转发的�
 npm run eject # webpack弹出
 ```
 
+会多出来很多配置文件，可能会出现Babel的错误，最快的解决方案就是在`package.json`中删除：
 
+```json
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+```
+
+在config/webpack.config.js中修改文件：![image-20250718144738899](React/image-20250718144738899.png)
 
 
 
