@@ -11,7 +11,7 @@ const userSlice = createSlice({
       state.userInfo = payload
     },
     changeLoginStatus: (state, { payload }) => {
-      state.isLogin = true
+      state.isLogin = payload
     }
   }
 })

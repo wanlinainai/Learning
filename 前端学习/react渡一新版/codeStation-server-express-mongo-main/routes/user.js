@@ -123,7 +123,7 @@ router.patch("/:id", async function (req, res) {
 /**
  * 根据 loginId 来查找用户是否存在
  */
-router.get("/userIsExist/:loginId", async function (req, res) {
+router.get("/exist/:loginId", async function (req, res) {
   const result = await userIsExistService(req.params.loginId);
   res.send(formatResponse(0, "", result));
 });

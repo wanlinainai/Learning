@@ -253,3 +253,33 @@ Redux是一个独立的状态管理库，有几个核心概念：
 
 
 
+## 问题记录
+
+1、 请求转发
+
+src目录下新建一个setupProxy文件，在该文件中进行请求转发的配置
+
+在使用的时候还需要安装一个插件`http-proxy-middleware`。
+
+2、 渲染svg图片
+
+在Vue中需要渲染一段HTML或者svg，需要使用v-html。在React中，可以通过如下方式：
+
+```react
+<div dangerouslySetInnerHTML={{__html: captcha}}></div>
+```
+
+3、 修改打包后的路径
+
+由于我们的静态资源文件以static ，所以我们配置了请求转发，但是create-react-app（基于webpack）默认在打包应用的时候，也会将打包好的资源放在static目录下，导致在加载打包好的资源的时候，也会进行请求转发，从而报错。
+
+我们需要做的是修改打包好的目录。首先运行下面的命令：
+
+```shell
+npm run eject # webpack弹出
+```
+
+
+
+
+

@@ -18,4 +18,13 @@ module.exports = function (app) {
       changeOrigin: true,
     })
   );
+
+  // 配置 /static 的代理
+  app.use(
+    '/static',
+    createProxyMiddleware({
+      target: 'http://localhost:7001',
+      changeOrigin: true,
+    })
+  );
 };
