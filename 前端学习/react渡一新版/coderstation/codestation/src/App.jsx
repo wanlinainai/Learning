@@ -1,15 +1,49 @@
 import './css/App.css';
-import { Layout } from 'antd';
+import { Layout,message } from 'antd';
 import PageFooter from './components/PageFooter';
 import NavHeader from './components/NavHeader';
 import RouteConfig from './router';
 import LoginForm from './components/LoginForm';
-import { useState } from 'react';
+import { useState, useEffect, use } from 'react';
+import { getInfo, getUserById } from './api/user';
+import { changeLoginStatus, initUserInfo } from './redux/userSlice';
+import { useDispatch } from 'react-redux';
+
 const { Header, Footer, Content } = Layout;
 
 function App() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const [messageApi, contextHolder] = message.useMessage();
+
+  const dispatch = useDispatch();
+
+  // 加载根组件的时候需要恢复用户的登录状态
+  useEffect(() => {
+    async function fetchData() {
+      const result = await getInfo()
+      // token是过期还是成功
+      if(result.data) {
+        const {data} = await getUserById(result.data._id);
+        dispatch(initUserInfo(data));
+        dispatch(changeLoginStatus(true));
+      } else {
+        // 过期了，删除token 
+        localStorage.removeItem('userToken')
+        // 弹出提醒
+        messageApi.open({
+          type: 'warning',
+          content: "登录过期，请重新登录"
+        })
+      }
+      
+    }
+
+    if(localStorage.getItem("userToken")) {
+      fetchData();
+    } 
+  })
 
   //关闭弹窗
   function closeModal() {
@@ -23,6 +57,7 @@ function App() {
   }
   return (
     <div className="App">
+       {contextHolder}
       {/* 头部 */}
       <Header>
         <NavHeader loginHandle={loginHandle} />

@@ -1,12 +1,31 @@
-import React from 'react';
 import { useSelector } from 'react-redux';
 import { Avatar, Button, List, Popover,Image } from 'antd';
 import styles from "../css/LoginAvatar.module.css";
 import { UserOutlined } from '@ant-design/icons';
+import { clearUserInfo, changeLoginStatus } from '../redux/userSlice';
+import { useDispatch } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 
 // 组件用于显示用户头像，如果没有登录显示注册登录
 function LoginAvatar(props) {
   const { isLogin, userInfo } = useSelector(state => state.user);
+
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+
+  function listClickHandle(item) {
+    if(item === '个人中心') {
+
+    } else {
+      // 退出登录
+      // 清除Token
+      localStorage.removeItem("userToken")
+      // 清除状态仓库
+      dispatch(clearUserInfo)
+      dispatch(changeLoginStatus(false))
+      navigate('/')
+    }
+  }
 
   let loginStatus = null;
   if (isLogin) {
@@ -16,7 +35,7 @@ function LoginAvatar(props) {
         size='large'
         renderItem={(item) => {
           return (
-            <List.Item style={{ cursor: 'pointer' }}>{item}</List.Item>
+            <List.Item style={{ cursor: 'pointer' }} onClick={() => listClickHandle(item)}>{item}</List.Item>
           )
         }}
       >

@@ -1,7 +1,7 @@
 import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button, message } from 'antd';
 import { useRef, useState, useEffect } from 'react';
 import styles from '../css/LoginForm.module.css'
-import { getCaptcha, userIsExist, addUser } from '../api/user';
+import { getCaptcha, userIsExist, addUser,userLogin,getUserById } from '../api/user';
 import { initUserInfo, changeLoginStatus } from '../redux/userSlice';
 import { useDispatch } from 'react-redux';
 
@@ -20,8 +20,42 @@ function LoginForm(props) {
   }, [props.isShow]);
 
 
-  function loginHandle() {
+  async function loginHandle() {
+    const result = await userLogin(loginInfo)
+    const data = result.data;
+    if(result.data) {
+      // 验证码是正确的
+      // 1、密码错误
+      // 2、账户冻结
+      if(!data.data) {
+        messageApi.open({
+          type: 'warning',
+          content: '账号密码错误'
+        })
+      } else if (!data.data.enabled) {
+        messageApi.open({
+          type: 'warning',
+          content: '账号被禁用'
+        })
+      } else {
+        // 存储token
+        localStorage.userToken = data.token;
+        // 用户信息存储到redux
+        const result = await getUserById(data.data._id)
+        dispatch(initUserInfo(result.data))
+        dispatch(changeLoginStatus(true))
+        // 关闭窗口
+        handleCancel();
+      }
 
+      // 3、正常登录
+    } else {
+      messageApi.open({
+        type: 'warning',
+        content: data.msg,
+      });
+      captchaClickHandle()
+    }
   }
   function handleOk() {
   }

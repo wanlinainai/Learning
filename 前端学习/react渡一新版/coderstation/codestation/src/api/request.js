@@ -8,7 +8,10 @@ const service = axios.create({
 // 请求拦截
 service.interceptors.request.use((config) => {
   // 拦截到请求之后u，可以做一些事情
-
+  const token = localStorage.getItem('userToken');
+  if(token) {
+    config.headers['Authorization'] = "Bearer " + token;
+  }
   // 放行
   return config;
 }, (err) => {
