@@ -13,6 +13,7 @@ function LoginForm(props) {
   const loginFormRef = useRef();
   const registerFormRef = useRef();
   const dispatch = useDispatch();
+  const [form] = Form.useForm();
 
   // 初始化时候调用
   useEffect(() => {
@@ -167,6 +168,26 @@ function LoginForm(props) {
     }
   }
 
+  // 重置按钮
+  function resetHandle() {
+    form.resetFields();
+    // 清空上一次的内容
+    setRegisterInfo({
+      loginId: "",
+      nickname: "",
+      captcha: ''
+    })
+
+    setLoginInfo({
+      loginId: "",
+      loginPwd: '',
+      captcha: '',
+      remember: false
+    })
+    // 重置验证码
+    captchaClickHandle();
+  }
+
   if (value === 1) {
     // 登录面板的jsx
     container = (
@@ -267,7 +288,7 @@ function LoginForm(props) {
             >
               登录
             </Button>
-            <Button type="primary" htmlType="submit">
+            <Button type="primary" htmlType='reset' onClick={() => resetHandle()}>
               重置
             </Button>
           </Form.Item>
@@ -357,7 +378,7 @@ function LoginForm(props) {
             >
               注册
             </Button>
-            <Button type="primary" htmlType="submit">
+            <Button type="primary" htmlType="reset" onClick={() => resetHandle()}>
               重置
             </Button>
           </Form.Item>
@@ -367,7 +388,7 @@ function LoginForm(props) {
   }
   return (
     <div>
-      <Modal title="注册/登录" open={props.isShow} onOk={handleOk} onCancel={props.closeModal}>
+      <Modal title="注册/登录" open={props.isShow} onOk={handleOk} onCancel={props.closeModal} footer={null}>
         <Radio.Group
           value={value}
           onChange={onChange}
