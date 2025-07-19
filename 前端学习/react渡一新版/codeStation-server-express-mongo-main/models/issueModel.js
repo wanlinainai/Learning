@@ -29,7 +29,7 @@ const issueSchema = new mongoose.Schema(
 // 创建数据模型的方法为 mongoose.model，只传一个名字，代表查找到对应名字的模型
 // 如果传入 Schema，代表创建模型 (1) 给模型取一个名字 （2）对应的 Schema （3）对应的集合
 
-mongoose.model("issueModel", issueSchema, "issues");
+const issueModel = mongoose.model("issueModel", issueSchema, "issues");
 
 // 将此模型进行导出
-module.exports = mongoose.model("issueModel");
+module.exports = issueModel;

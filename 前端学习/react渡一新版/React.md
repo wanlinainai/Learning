@@ -294,3 +294,11 @@ npm run eject # webpack弹出
 
 
 
+
+
+
+
+```shell
+mongod -f E:\envirment\MongoDB\mongodb-win32-x86_64-windows-5.0.30\conf\mongodb.conf
+```
+

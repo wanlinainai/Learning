@@ -5,6 +5,8 @@ const issueModel = require("../models/issueModel");
  * 分页查找问答
  */
 module.exports.findIssueByPageDao = async function (queryObj) {
+  queryObj.current = Number(queryObj.current) || 1;     // 默认第一页
+  queryObj.pageSize = Number(queryObj.pageSize) || 10;  // 默认每页10条
   const pageObj = {
     currentPage: Number(queryObj.current),
     eachPage: Number(queryObj.pageSize),
@@ -20,10 +22,17 @@ module.exports.findIssueByPageDao = async function (queryObj) {
     queryCondition.typeId = queryObj.typeId;
   }
   if (queryObj.issueStatus != undefined) {
-    queryCondition.issueStatus = queryObj.issueStatus;
+    queryCondition.issueStatus = queryObj.issueStatus === 'true' ? true : false;
   }
 
   pageObj.count = await issueModel.countDocuments(queryCondition); // 数据总条数
+  console.log('看看这个queryCondition:', queryCondition);
+  console.log('看看这个queryObj:', queryObj);
+  console.log('看看这个pageObj:', pageObj);
+
+  console.log("模型绑定的集合名是：", issueModel.collection.name);
+
+
   pageObj.totalPage = Math.ceil(pageObj.count / pageObj.eachPage); // 总页数
   pageObj.data = await issueModel
     .find(queryCondition)

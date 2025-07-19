@@ -4,7 +4,7 @@ import PageFooter from './components/PageFooter';
 import NavHeader from './components/NavHeader';
 import RouteConfig from './router';
 import LoginForm from './components/LoginForm';
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect } from 'react';
 import { getInfo, getUserById } from './api/user';
 import { changeLoginStatus, initUserInfo } from './redux/userSlice';
 import { useDispatch } from 'react-redux';
