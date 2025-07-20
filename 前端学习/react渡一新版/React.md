@@ -302,3 +302,20 @@ npm run eject # webpack弹出
 mongod -f E:\envirment\MongoDB\mongodb-win32-x86_64-windows-5.0.30\conf\mongodb.conf
 ```
 
+4、React中，如果想要设置多个类名格式，可以借助第三方库，叫做classnames，地址：*https://www.npmjs.com/package/classnames*
+
+5、关于Markdown编辑器
+
+安装的是：**toast-ui edior**,https://nhn.github.io/tui.editor/latest/ToastUIEditor
+https://github.com/nhn/tui.editor/tree/master/apps/react-editor#-install
+
+安装出现的问题是react版本不兼容：（强制安装）
+
+```shell
+npm install --save @toast-ui/react-editor --force
+```
+
+
+
+
+
