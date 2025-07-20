@@ -4,7 +4,7 @@
 
 // 时间戳格式化
 export function formatDate(timestamp, part) {
-  if(!timestamp) {
+  if (!timestamp) {
     return;
   }
   let date = new Date(parseInt(timestamp));
@@ -27,7 +27,7 @@ export function formatDate(timestamp, part) {
     "星期六"
   ]
 
-    let week = weekArr[date.getDay()];
+  let week = weekArr[date.getDay()];
 
   // 需要给一位数前面加 0
   // 9 点 ----> 09:45:03
@@ -55,7 +55,7 @@ export function formatDate(timestamp, part) {
 
   let str = "";
   // 添加的part用于进行不同类型的日期展示
-  switch(part) {
+  switch (part) {
     case "year": {
       str = `${year}-${month}-${day}`;
       break;
@@ -77,4 +77,23 @@ export function formatDate(timestamp, part) {
     }
   }
   return str
+}
+
+/**
+ * 批量生成下拉列表的option
+ */
+export function typeOptionCreator(Select, typeList) {
+  let optionContainer = [];
+  for (let i = 0; i < typeList.length; i++) {
+    optionContainer.push(
+      <Select.Option
+        value={typeList[i]._id}
+        key={typeList[i]._id}
+      >
+        {typeList[i].typeName}
+      </Select.Option>
+    )
+  }
+
+  return optionContainer;
 }

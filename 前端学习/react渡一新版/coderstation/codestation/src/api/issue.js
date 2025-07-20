@@ -13,3 +13,14 @@ export function getIssueByPage(params) {
     }
   })
 }
+
+/**
+ * 新增问答
+ */
+export function addIssue(newIssue) {
+  return request({
+    url: '/api/issue/',
+    method: 'post',
+    data: newIssue
+  })
+}
