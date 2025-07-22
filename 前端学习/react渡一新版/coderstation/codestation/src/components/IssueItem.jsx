@@ -50,7 +50,7 @@ function IssueItem(props) {
       </div>
       {/* 问题内容 */}
       <div className={styles.issueContainer}>
-        <div className={styles.top}>{props.issueInfo.issueTitle}</div>
+        <div className={styles.top} onClick={}>{props.issueInfo.issueTitle}</div>
         <div className={styles.bottom}>
           {/* 标签类型 */}
           <div className={styles.left}>

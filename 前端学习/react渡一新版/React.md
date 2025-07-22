@@ -315,7 +315,41 @@ https://github.com/nhn/tui.editor/tree/master/apps/react-editor#-install
 npm install --save @toast-ui/react-editor --force
 ```
 
+安装之后会报错：
 
+```shell
+WARNING in ./node_modules/@toast-ui/editor/dist/toastui-editor-viewer.js
+Module Warning (from ./node_modules/source-map-loader/dist/cjs.js):
+Failed to parse source map from 'E:\github_repository\Learning\前端学习\react渡一新版\coderstation\codestation\node_modules\@toast-ui\editor\dist\purify.js.map' file: Error: ENOENT: no such file or directory, open 'E:\github_repository\Learning\前端学习\react渡一新版\coderstation\codestation\node_modules\@toast-ui\editor\dist\purify.js.map'
+```
+
+> 解决方案：
+>
+> 使用cross-env（推荐）
+>
+> ```shell
+> npm install --save-dev cross-env --force
+> ```
+>
+> 修改package.json
+>
+> ```json
+> {
+>   "scripts": {
+>     "start": "cross-env GENERATE_SOURCEMAP=false node scripts/start.js",
+>     "build": "node scripts/build.js",
+>     "test": "node scripts/test.js"
+>   }
+> }
+> ```
+
+6、CORB问题：
+
+如果使用的是别人服务器上的图片，可能出现的问题是：CORB的问题，产生问题的原因是：跨域请求回来的数据MIME Type同跨域标签应有的MIME类型不匹配时，浏览器会启动CORB保护数据不被泄露。
+
+比如：script请求的响应是json.img，请求回来的是JSON。
+
+一般来说这种问题是服务器端做了处理导致的，如果使用自己的OSS的话不会出现，或者是Base64的话不会出现。
 
 
 
