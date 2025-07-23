@@ -1,5 +1,5 @@
 import './css/App.css';
-import { Layout,message } from 'antd';
+import { Layout, message } from 'antd';
 import PageFooter from './components/PageFooter';
 import NavHeader from './components/NavHeader';
 import RouteConfig from './router';
@@ -22,8 +22,8 @@ function App() {
     async function fetchData() {
       const result = await getInfo()
       // token是过期还是成功
-      if(result.data) {
-        const {data} = await getUserById(result.data._id);
+      if (result.data) {
+        const { data } = await getUserById(result.data._id);
         dispatch(initUserInfo(data));
         dispatch(changeLoginStatus(true));
       } else {
@@ -32,12 +32,12 @@ function App() {
         // 弹出提醒
         message.warning('登录过期，请重新登录')
       }
-      
+
     }
 
-    if(localStorage.getItem("userToken")) {
+    if (localStorage.getItem("userToken")) {
       fetchData();
-    } 
+    }
   })
 
   //关闭弹窗

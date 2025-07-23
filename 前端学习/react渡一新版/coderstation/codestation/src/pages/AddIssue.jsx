@@ -63,7 +63,6 @@ function AddIssue(props) {
   }
   return (
     <div className={styles.container}>
-      {contextHolder}
       <Form
         name="basic"
         initialValues={issueInfo}

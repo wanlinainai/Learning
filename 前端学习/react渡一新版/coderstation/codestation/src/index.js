@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import 'antd/dist/antd.css';
+import "antd/dist/antd.min.css";
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
@@ -9,12 +9,13 @@ import zhCN from 'antd/es/locale/zh_CN';
 import { ConfigProvider } from 'antd';
 import store from './redux/store';
 import { Provider } from 'react-redux';
+import { message } from 'antd';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <Provider store={store}>
     <BrowserRouter>
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider locale={zhCN} getPopupContainer={() => document.body} >
         <App />
       </ConfigProvider>
     </BrowserRouter>

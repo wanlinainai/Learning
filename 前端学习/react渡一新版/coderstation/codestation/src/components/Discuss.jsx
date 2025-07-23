@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Avatar, Form, Button, List, Comment, Tooltip } from 'antd';
+import { useEffect, useRef, useState } from 'react';
+import { Avatar, Form, Button, List, Comment, Tooltip, message } from 'antd';
 import { useSelector } from 'react-redux';
 import { UserOutlined } from '@ant-design/icons';
 import { Editor } from '@toast-ui/react-editor';
@@ -23,8 +23,12 @@ function Discuss(props) {
   })
   const editorRef = useRef();
 
+
   useEffect(() => {
     async function fetchCommentList() {
+      // 添加安全检查
+      if (!props.targetId) return;
+
       let data = null;
       if (props.commentType === 1) {
         // 获取问答的Id
@@ -36,19 +40,23 @@ function Discuss(props) {
       } else if (props.commentType === 2) {
         // 书籍的评论
       }
-      for (let i = 0; i < data.data.length; i++) {
-        const result = await getUserById(data.data[i].userId);
-        data.data[i].userInfo = result.data;
+
+      // 添加数据存在性检查
+      if (data && data.data && data.data.length > 0) {
+        for (let i = 0; i < data.data.length; i++) {
+          const result = await getUserById(data.data[i].userId);
+          data.data[i].userInfo = result.data;
+        }
+        // 更新评论数据
+        setCommentList(data.data);
+        // 更新分页数据
+        setPageInfo({
+          current: data.currentPage,
+          eachPage: data.eachPage,
+          count: data.count,
+          total: data.totalPage
+        });
       }
-      // 更新评论数据
-      setCommentList(data.data);
-      // 更新分页数据
-      setPageInfo({
-        current: data.currentPage,
-        eachPage: data.eachPage,
-        count: data.count,
-        total: data.totalPage
-      })
     }
     fetchCommentList();
   }, [props.targetId])
@@ -71,8 +79,9 @@ function Discuss(props) {
   function onSubmit() {
     let newComment = null;
     if (props.commentType === 1) {
-      newComment = editorRef.current.getInstance().getHTML();
-      if (newComment === '<p><br></p>') {
+      newComment = editorRef.current?.getInstance().getHTML();
+      console.log('编辑器内容:', newComment); // 调试日志
+      if (newComment === '<p><br></p>' || newComment === '<p></p>') {
         newComment = ''
       }
     } else if (props.commentType === 2) {
@@ -80,10 +89,12 @@ function Discuss(props) {
     }
 
     if (!newComment) {
-      message.warning('请输入评论内容')
+      console.log('显示警告消息'); // 调试日志
+      message.warning('请输入评论内容');
       return;
     }
   }
+
   return (
     <div>
       {/* 评论框 */}
@@ -93,10 +104,10 @@ function Discuss(props) {
           <>
             <Form.Item>
               <Editor
-                initalValue=""
+                initialValue=""
                 previewStyle="vertical"
                 height="270px"
-                initalEditType="wysiwyg"
+                initialEditType="wysiwyg"
                 language="zh-CN"
                 ref={editorRef}
                 className="editor"
@@ -104,34 +115,35 @@ function Discuss(props) {
             </Form.Item>
             <Form.Item>
               <Button
-                disabled={isLogin ? true : false}
+                disabled={!isLogin}
                 type='primary'
                 onClick={onSubmit}
-              >添加评论</Button>
+              >
+                添加评论
+              </Button>
             </Form.Item>
           </>
         }
       />
       {/* 评论列表 */}
       {
-        commentList?.length > 0
-        &&
+        commentList?.length > 0 &&
         <List
           header="当前评论"
           dataSource={commentList}
-          renderItem={(item) => {
+          renderItem={(item) => (
             <Comment
-              avatar={<Avatar src={item.userInfo.avatar}></Avatar>}
-              content={<div>
-                dangerouslySetInnerHTML={{ __html: item.commentContent }}
-              </div>}
+              avatar={<Avatar src={item.userInfo?.avatar}></Avatar>}
+              content={
+                <div dangerouslySetInnerHTML={{ __html: item.commentContent }} />
+              }
               datetime={
                 <Tooltip title={formatDate(item.commentDate, 'year')}>
                   <span>{formatDate(item.commentDate, 'year')}</span>
                 </Tooltip>
               }
             />
-          }}
+          )}
         />
       }
       {/* 分页 */}
