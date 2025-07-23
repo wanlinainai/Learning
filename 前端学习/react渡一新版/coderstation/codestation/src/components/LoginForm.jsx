@@ -9,7 +9,6 @@ function LoginForm(props) {
 
   const [value, setValue] = useState(1)
   const [captcha, setCaptcha] = useState(null);
-  const [messageApi, contextHolder] = message.useMessage();
   const loginFormRef = useRef();
   const registerFormRef = useRef();
   const dispatch = useDispatch();
@@ -30,15 +29,9 @@ function LoginForm(props) {
       // 1、密码错误
       // 2、账户冻结
       if (!data.data) {
-        messageApi.open({
-          type: 'warning',
-          content: '账号密码错误'
-        })
+        message.warning('账号密码错误');
       } else if (!data.data.enabled) {
-        messageApi.open({
-          type: 'warning',
-          content: '账号被禁用'
-        })
+        message.warning('账号被禁用');
       } else {
         // 存储token
         localStorage.userToken = data.token;
@@ -52,10 +45,7 @@ function LoginForm(props) {
 
       // 3、正常登录
     } else {
-      messageApi.open({
-        type: 'warning',
-        content: data.msg,
-      });
+      message.success(data.msg)
       captchaClickHandle()
     }
   }
@@ -127,10 +117,7 @@ function LoginForm(props) {
     const data = await addUser(registerInfo);
     if (data.data) {
       // 注册成功
-      messageApi.open({
-        type: 'success',
-        content: '用户注册成功，默认密码是 123456'
-      })
+      message.success('用户注册成功，默认密码是 123456')
       // 用户信息存储到数据仓库中
       dispatch(initUserInfo(data.data))
 
@@ -141,10 +128,7 @@ function LoginForm(props) {
       handleCancel()
     } else {
       // 失败
-      messageApi.open({
-        type: 'warning',
-        content: data.msg,
-      });
+      message.warning(data.msg)
 
       captchaClickHandle();
     }
@@ -193,7 +177,6 @@ function LoginForm(props) {
     // 登录面板的jsx
     container = (
       <div className={styles.container}>
-        {contextHolder}
         <Form
           name="basic1"
           autoComplete="off"
@@ -300,7 +283,6 @@ function LoginForm(props) {
     // 注册面板的jsx
     container = (
       <div className={styles.container}>
-        {contextHolder}
         <Form
           name="basic2"
           autoComplete="off"

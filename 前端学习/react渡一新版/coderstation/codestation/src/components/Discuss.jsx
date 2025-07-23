@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Avatar, Form, Button, List, Tooltip } from 'antd';
+import { Avatar, Form, Button, List, Comment, Tooltip } from 'antd';
 import { useSelector } from 'react-redux';
 import { UserOutlined } from '@ant-design/icons';
 import { Editor } from '@toast-ui/react-editor';
@@ -64,10 +64,30 @@ function Discuss(props) {
       <Avatar icon={<UserOutlined />} />
     )
   }
+
+  /**
+   * 添加评论
+   */
+  function onSubmit() {
+    let newComment = null;
+    if (props.commentType === 1) {
+      newComment = editorRef.current.getInstance().getHTML();
+      if (newComment === '<p><br></p>') {
+        newComment = ''
+      }
+    } else if (props.commentType === 2) {
+
+    }
+
+    if (!newComment) {
+      message.warning('请输入评论内容')
+      return;
+    }
+  }
   return (
     <div>
       {/* 评论框 */}
-      {/* <Comment
+      <Comment
         avatar={avatar}
         content={
           <>
@@ -85,11 +105,13 @@ function Discuss(props) {
             <Form.Item>
               <Button
                 disabled={isLogin ? true : false}
-                type='primary'>添加评论</Button>
+                type='primary'
+                onClick={onSubmit}
+              >添加评论</Button>
             </Form.Item>
           </>
         }
-      /> */}
+      />
       {/* 评论列表 */}
       {
         commentList?.length > 0

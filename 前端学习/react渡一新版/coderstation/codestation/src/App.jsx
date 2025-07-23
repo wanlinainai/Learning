@@ -15,8 +15,6 @@ function App() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const [messageApi, contextHolder] = message.useMessage();
-
   const dispatch = useDispatch();
 
   // 加载根组件的时候需要恢复用户的登录状态
@@ -32,10 +30,7 @@ function App() {
         // 过期了，删除token 
         localStorage.removeItem('userToken')
         // 弹出提醒
-        messageApi.open({
-          type: 'warning',
-          content: "登录过期，请重新登录"
-        })
+        message.warning('登录过期，请重新登录')
       }
       
     }
@@ -57,7 +52,6 @@ function App() {
   }
   return (
     <div className="App">
-       {contextHolder}
       {/* 头部 */}
       <Header>
         <NavHeader loginHandle={loginHandle} />

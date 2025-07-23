@@ -21,8 +21,6 @@ function AddIssue(props) {
     userId: ''
   })
 
-  const [messageApi, contextHolder] = message.useMessage();
-
 
   const dispatch = useDispatch();
   const { typeList } = useSelector(state => state.type);
@@ -46,15 +44,8 @@ function AddIssue(props) {
       typeId: issueInfo.typeId
     }).then(() => {
       // 消息展示
-      messageApi.open({
-        type: 'success',
-        content: '文章已提交，审核之后将会展示给其他用户',
-        duration: 2, // 2秒后自动关闭
-        onClose: () => {
-          // 跳转到首页
-          navigate("/");
-        }
-      })
+      message.success('文章已提交，审核之后将会展示给其他用户');
+      navigate("/");
     })
   }
 

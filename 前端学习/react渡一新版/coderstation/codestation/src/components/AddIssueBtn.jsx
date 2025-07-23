@@ -11,8 +11,6 @@ function AddIssue(props) {
   const { isLogin } = useSelector(state => state.user)
   const navigate = useNavigate();
 
-  const [messageApi, contextHolder] = message.useMessage();
-
   function clickHandle() {
     // 跳转到问答页面，校验登录
     if (isLogin) {
@@ -20,15 +18,11 @@ function AddIssue(props) {
       navigate("/addIssue")
     } else {
       // 请先登录
-      messageApi.open({
-        type: 'error',
-        content: '请先登录',
-      });
+      message.error('登录过期，请重新登录')
     }
   }
   return (
     <div>
-      {contextHolder}
       <Button type='primary'
         size='large'
         style={{
