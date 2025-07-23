@@ -74,3 +74,14 @@ export function getUserByPointsRank() {
     method: 'GET'
   })
 }
+
+/**
+ * 根据id修改用户
+ */
+export function editUser(userId, newUserInfo) {
+  return request({
+    url: `/api/user/${userId}`,
+    method: 'patch',
+    data: newUserInfo
+  })
+}

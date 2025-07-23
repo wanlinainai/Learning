@@ -15,3 +15,16 @@ export function getIssueCommentById(id, params) {
     }
   })
 }
+
+/**
+ * 添加新评论
+ * @param {*} newComment 
+ * @returns 
+ */
+export function addComment(newComment) {
+  return request({
+    url: '/api/comment',
+    method: 'post',
+    data: newComment
+  })
+}

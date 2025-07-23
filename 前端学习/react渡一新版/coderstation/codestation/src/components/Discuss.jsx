@@ -4,9 +4,10 @@ import { useSelector } from 'react-redux';
 import { UserOutlined } from '@ant-design/icons';
 import { Editor } from '@toast-ui/react-editor';
 import '@toast-ui/editor/dist/toastui-editor.css';
-import { getIssueCommentById } from '../api/comment';
+import { addComment, getIssueCommentById } from '../api/comment';
 import { getUserById } from '../api/user';
 import { formatDate } from '../utils/tools';
+import { updateIssue } from '../api/issue';
 
 /**
  * 评论组件
@@ -22,6 +23,7 @@ function Discuss(props) {
     total: 0
   })
   const editorRef = useRef();
+  const [refresh, setRefresh] = useState(false);
 
 
   useEffect(() => {
@@ -59,7 +61,7 @@ function Discuss(props) {
       }
     }
     fetchCommentList();
-  }, [props.targetId])
+  }, [props.targetId, refresh])
 
   // 头像处理
   let avatar = null;
@@ -93,6 +95,28 @@ function Discuss(props) {
       message.warning('请输入评论内容');
       return;
     }
+
+    // 提交评论
+    addComment({
+      userId: userInfo._id,
+      typeId: props.issueInfo ? props.issueInfo.typeId : props.bookInfo.typeId,
+      commentContent: newComment,
+      commentType: props.commentType,
+      bookId: null,
+      issueId: props.targetId
+    })
+    message.success('评论成功');
+    // 刷新页面
+    setRefresh(!refresh);
+    // 清除Markdown文档
+    editorRef.current.getInstance().setHTML('');
+
+    // 积分的变化 + 评论数的变化
+    updateIssue(props.targetId, {
+      commentNumber: props.issueInfo ? ++props.issueInfo.commentNumber : ++props.bookInfo.commentNumber
+    })
+    
+
   }
 
   return (

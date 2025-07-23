@@ -1,4 +1,13 @@
-import { createSlice } from '@reduxjs/toolkit'
+import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
+import { editUser } from '../api/user'
+
+export const updateUserInfoAsync = createAsyncThunk(
+  "user/updateUserInfoAsync",
+  async (payload, thunkApi) => {
+    await editUser(payload.userId, payload.newInfo);
+    thunkApi.dispatch(updateUserInfo(payload.newInfo));
+  }
+)
 
 const userSlice = createSlice({
   name: 'user',
@@ -15,10 +24,14 @@ const userSlice = createSlice({
     },
     clearUserInfo: (state, { payload }) => {
       state.userInfo = {};
+    },
+    // 更新用户信息
+    updateUserInfo: (state, { payload }) => {
+
     }
   }
 })
 
 
-export const { initUserInfo, changeLoginStatus, clearUserInfo } = userSlice.actions;
+export const { initUserInfo, changeLoginStatus, clearUserInfo, updateUserInfo } = userSlice.actions;
 export default userSlice.reducer;

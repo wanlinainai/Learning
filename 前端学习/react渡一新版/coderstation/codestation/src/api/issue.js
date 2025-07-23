@@ -34,3 +34,14 @@ export function getIssueById(id) {
     method: "GET"
   })
 }
+
+/**
+ * 更新问答
+ */
+export function updateIssue(issueId, newIssueInfo) {
+  return request({
+    url: `/api/issue/${issueId}`,
+    method: 'patch',
+    data: newIssueInfo
+  })
+}

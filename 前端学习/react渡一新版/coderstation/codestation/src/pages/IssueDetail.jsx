@@ -56,6 +56,7 @@ function IssueDetail(props) {
             <Discuss
               commentType={1}
               targetId={issueInfo._id}
+              issueInfo={issueInfo}
             />
           )}
         </div>
