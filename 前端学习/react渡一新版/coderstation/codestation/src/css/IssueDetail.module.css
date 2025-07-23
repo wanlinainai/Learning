@@ -24,7 +24,7 @@
     border-radius: 10px;
 }
 
-.leftSide .toastui-editor-main pre{
+.leftSide .toastui-editor-main pre {
     color: #000;
 }
 
@@ -68,6 +68,10 @@
 .content {
     font-weight: 300;
     font-size: 16px;
+}
+
+.content img {
+    width: 100%;
 }
 
 .rightSide {

@@ -1,7 +1,7 @@
 import { Form, Modal, Radio, Input, Row, Col, Checkbox, Button, message } from 'antd';
 import { useRef, useState, useEffect } from 'react';
 import styles from '../css/LoginForm.module.css'
-import { getCaptcha, userIsExist, addUser,userLogin,getUserById } from '../api/user';
+import { getCaptcha, userIsExist, addUser, userLogin, getUserById } from '../api/user';
 import { initUserInfo, changeLoginStatus } from '../redux/userSlice';
 import { useDispatch } from 'react-redux';
 
@@ -24,11 +24,12 @@ function LoginForm(props) {
   async function loginHandle() {
     const result = await userLogin(loginInfo)
     const data = result.data;
-    if(result.data) {
+
+    if (result.data) {
       // 验证码是正确的
       // 1、密码错误
       // 2、账户冻结
-      if(!data.data) {
+      if (!data.data) {
         messageApi.open({
           type: 'warning',
           content: '账号密码错误'

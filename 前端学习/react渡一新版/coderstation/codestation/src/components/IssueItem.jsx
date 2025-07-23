@@ -1,10 +1,11 @@
-import {useEffect, useState} from 'react';
+import { useEffect, useState } from 'react';
 import styles from '../css/IssueItem.module.css'
 import { formatDate } from '../utils/tools';
 import { useDispatch, useSelector } from 'react-redux';
 import { getTypeList } from '../redux/typeSlice';
 import { Tag } from 'antd';
-import {getUserById} from '../api/user';
+import { getUserById } from '../api/user';
+import { useNavigate } from 'react-router-dom';
 
 /**
  * 每一条问答的项目
@@ -16,23 +17,25 @@ function IssueItem(props) {
   const [userInfo, setUserInfo] = useState([]);
 
   const dispatch = useDispatch();
-  const {typeList} = useSelector(state => state.type)
+  const { typeList } = useSelector(state => state.type)
 
   const colorArr = ['#108ee9', '#2db7f5', '#f50', 'green', '#87d068', 'blue', 'red', 'purple'];
 
-  useEffect(()=> {
-    if(!typeList.length) {
+  useEffect(() => {
+    if (!typeList.length) {
       // 派发 Action 来发送请求，获取到数据填充到状态仓库
       dispatch(getTypeList())
     }
 
     // 发送请求获取用户信息
     async function fetchUserData() {
-      const {data} = await getUserById(props.issueInfo.userId);
+      const { data } = await getUserById(props.issueInfo.userId);
       setUserInfo(data)
     }
     fetchUserData();
   }, [])
+
+  const navigate = useNavigate();
 
   const type = typeList.find(item => item._id === props.issueInfo.typeId)
 
@@ -50,7 +53,7 @@ function IssueItem(props) {
       </div>
       {/* 问题内容 */}
       <div className={styles.issueContainer}>
-        <div className={styles.top} onClick={}>{props.issueInfo.issueTitle}</div>
+        <div className={styles.top} onClick={() => navigate(`/issues/${props.issueInfo._id}`)}>{props.issueInfo.issueTitle}</div>
         <div className={styles.bottom}>
           {/* 标签类型 */}
           <div className={styles.left}>
