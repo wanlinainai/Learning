@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import { getInfo, getUserById } from './api/user';
 import { changeLoginStatus, initUserInfo } from './redux/userSlice';
 import { useDispatch } from 'react-redux';
+import RouteBefore from './router/RouteBefore';
 
 const { Header, Footer, Content } = Layout;
 
@@ -58,7 +59,7 @@ function App() {
       </Header>
       {/* 内容 */}
       <Content className='content'>
-        <RouteConfig></RouteConfig>
+        <RouteBefore />
       </Content>
       {/* 底部 */}
       <Footer className='footer'>
