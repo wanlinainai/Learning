@@ -15,7 +15,7 @@ function PageHeader(props) {
       </div>
 
       {/* 分类选择 */}
-      
+      {props.children}
     </div>
   );
 }

@@ -1,9 +1,32 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Input, Select } from 'antd';
 import LoginAvatar from './LoginAvatar';
+import { useNavigate } from 'react-router-dom';
 
 function NavHeader(props) {
+
+  const navigate = useNavigate();
+  const [searchOption, setSearchOption] = useState("issue")
+
+  function onSearch(value) {
+    if(value) {
+      // API搜索操作
+      navigate('/searchPage', {
+        state: {
+          value,
+          searchOption
+        }
+      })
+    } else {
+      // 用户点击了 * ， 跳转首页
+      navigate("/")
+    }
+  }
+
+  function onChange(val) {
+    setSearchOption(val)
+  }
   return (
     <div className='headerContainer'>
       {/* 头部 logo */}
@@ -26,6 +49,7 @@ function NavHeader(props) {
         <Select defaultValue="issue" size='large'
           style={{ width: '20%', borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
           bordered={true}
+          onChange={onChange}
         >
           <Select.Option value="issue">问答</Select.Option>
           <Select.Option value="book">书籍</Select.Option>
@@ -40,6 +64,7 @@ function NavHeader(props) {
             borderTopLeftRadius: 0,
             borderBottomLeftRadius: 0
           }}
+          onSearch={onSearch}
         />
       </div>
 
