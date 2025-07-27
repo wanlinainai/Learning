@@ -265,6 +265,39 @@ function Personal(props) {
       break;
     }
     case "个人简介": {
+      modalContent = (
+        <>
+          <Form
+            name='basic3'
+            initialValues={userInfo}
+            autoComplete='off'
+            onFinish={handleOk}
+          >
+            {/* 自我介绍 */}
+            <Form.Item
+              label="自我介绍"
+              name="intro"
+            >
+              <Input.TextArea
+                rows={6}
+                value={userInfo.intro}
+                placeholder='选填'
+                onChange={(e) => updateInfo(e.target.value, 'intro')}
+              />
+            </Form.Item>
+
+            <Form.Item wrapperCol={{ offset: 5, span: 16 }}>
+              <Button type='primary' htmlType='submit'>
+                确认
+              </Button>
+
+              <Button type='link' htmlType='reset' className="resetBtn">
+                重置
+              </Button>
+            </Form.Item>
+          </Form>
+        </>
+      )
       break;
     }
   }
