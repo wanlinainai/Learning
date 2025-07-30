@@ -9,6 +9,7 @@ export default defineConfig({
   layout: {
     title: 'code station',
   },
+  dva: {}, // 打开dva插件
   routes: [
     {
       path: '/',
@@ -22,7 +23,7 @@ export default defineConfig({
     },
     {
       name: '管理员',
-      path: '/Admin',
+      path: '/admin',
       icon: "SafetyCertificateOutlined",
       routes: [{
         name: '管理员列表',
@@ -124,6 +125,21 @@ export default defineConfig({
       icon: 'BarsOutlined'
     }
   ],
+  proxy: {
+    '/api': {
+      target: 'http://localhost:7001',
+      changeOrigin: true
+    },
+    '/static': {
+      target: 'http://localhost:7001',
+      changeOrigin: true,
+    },
+    '/res': {
+      target: 'http://localhost:7001',
+      changeOrigin: true,
+      pathRewrite: { '^/res': '' }
+    }
+  },
   npmClient: 'npm',
 });
 
