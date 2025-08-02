@@ -16,6 +16,11 @@ export default {
       const newState = { ...state }
       newState.adminList = payload
       return newState
+    },
+    addAdmin(state, { payload }) {
+      const newObj = { ...state };
+      newObj.adminInfo = payload;
+      return newObj;
     }
   },
 
@@ -29,6 +34,13 @@ export default {
         type: 'initAdminList',
         payload: data
       })
+    },
+
+    // 新增管理员
+    *_addAdmin({ payload }, { put, call }) {
+      // 服务器通信，新增功能
+      const { data } = yield call(AdminController.addAdmin, payload);
+      yield put({ type: 'addAdmin', payload: data });
     }
   }
 }

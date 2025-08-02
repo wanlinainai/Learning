@@ -38,7 +38,8 @@ function Admin(props) {
       title: '头像',
       dataIndex: 'avatar',
       key: 'avatar',
-      align: 'center'
+      align: 'center',
+      valueType: 'image'
     },
     {
       title: '权限',
