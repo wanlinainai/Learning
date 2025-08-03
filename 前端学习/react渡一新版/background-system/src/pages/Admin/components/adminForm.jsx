@@ -1,6 +1,6 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { Button, Form, Image, Input, Radio, Upload } from 'antd';
-import {useRef} from 'react';
+import { useRef } from 'react';
 import AdminController from '@/services/admin';
 
 /**
@@ -11,17 +11,17 @@ import AdminController from '@/services/admin';
 function AdminForm(props) {
 
   const formRef = useRef();
-  const {type, submitHandle, adminInfo, setAdminInfo} = props;
+  const { type, submitHandle, adminInfo, setAdminInfo } = props;
 
   // 头像
   let avatarPreview = null;
-  if(type === 'edit') {
+  if (type === 'edit') {
     avatarPreview = (
-      <Form.Item 
+      <Form.Item
         label='当前头像'
         name="avatarPreview"
       >
-        <Image src={adminInfo.avatar} width={100}/>
+        <Image src={adminInfo.avatar} width={100} />
       </Form.Item>
     )
   }
@@ -32,8 +32,8 @@ function AdminForm(props) {
    * @param {*} key 
    */
   function updateInfo(newInfo, key) {
-    const newAdminInfo = {...adminInfo};
-    if(typeof newInfo === 'string') {
+    const newAdminInfo = { ...adminInfo };
+    if (typeof newInfo === 'string') {
       newAdminInfo[key] = newInfo.trim();
     } else {
       newAdminInfo[key] = newInfo;
@@ -70,16 +70,16 @@ function AdminForm(props) {
         label="管理员账号"
         name="loginId"
         rules={[
-          {required: true, message: '请输入管理员账号'},
+          { required: true, message: '请输入管理员账号' },
           // 验证用户是否已经存在
-          {validator: checkLoginIdIsExist}
+          { validator: checkLoginIdIsExist }
         ]}
-        validateTrigger="onBlur" 
+        validateTrigger="onBlur"
       >
-        <Input 
+        <Input
           value={adminInfo?.loginId}
           onChange={(e) => updateInfo(e.target.value, 'loginId')}
-          disabled = {type === 'edit' ? true : false}
+          disabled={type === 'edit' ? true : false}
         />
       </Form.Item>
 
@@ -87,12 +87,11 @@ function AdminForm(props) {
         label="管理员密码"
         name="loginPwd"
         rules={[
-          type === 'edit' ? {required: true, message: '密码不能为空'} : null
+          type === 'edit' ? { required: true, message: '密码不能为空' } : null
         ]}
       >
         <Input.Password
           placeholder='密码可选，默认是123123'
-          value={adminInfo?.loginPwd}
           onChange={(e) => updateInfo(e.target.value, 'loginPwd')}
         />
       </Form.Item>
@@ -101,7 +100,7 @@ function AdminForm(props) {
         label='管理员昵称'
         name='nickname'
       >
-        <Input 
+        <Input
           placeholder='昵称可选，默认是新增管理员'
           value={adminInfo?.nickname}
           onChange={(e) => updateInfo(e.target.value, "nickname")}
@@ -112,7 +111,7 @@ function AdminForm(props) {
         label="权限选择"
         name="permission"
         rules={[
-          {required: true, message: '请选择管理员权限'}
+          { required: true, message: '请选择管理员权限' }
         ]}
       >
         <Radio.Group>
@@ -132,7 +131,7 @@ function AdminForm(props) {
           maxCount={1}
           class="uploadStyle"
           onChange={(e) => {
-            if(e.file.status === 'done') {
+            if (e.file.status === 'done') {
               // 上传已经完成
               const url = e.file.response.data;
               updateInfo(url, 'avatar');
@@ -140,8 +139,8 @@ function AdminForm(props) {
           }}
         >
           <div>
-            <PlusOutlined/>
-            <div 
+            <PlusOutlined />
+            <div
               style={{
                 marginTop: 8
               }}
@@ -152,12 +151,12 @@ function AdminForm(props) {
 
       {/* 按钮容器 */}
       <Form.Item
-        wrapperCol={{offset: 5, span: 16}}
+        wrapperCol={{ offset: 5, span: 16 }}
       >
-        <Button 
+        <Button
           type='primary'
           htmlType='submit'
-        >{type === 'add' ? '确认新增': "修改"}</Button>
+        >{type === 'add' ? '确认新增' : "修改"}</Button>
         <Button type='link' htmlType='submit' className='resetBtn'>重置</Button>
       </Form.Item>
     </Form>

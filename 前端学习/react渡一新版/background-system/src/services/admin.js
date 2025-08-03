@@ -30,8 +30,31 @@ function addAdmin(newAdminInfo) {
   })
 }
 
+/**
+ * 删除管理员
+ */
+function deleteAdmin(adminId) {
+  return request(`/api/admin/${adminId}`, {
+    method: 'delete'
+  })
+}
+
+/**
+ * 更新管理员信息
+ * @param {*} adminId 
+ * @param {*} newAdminInfo 
+ */
+function editAdmin(adminId, newAdminInfo) {
+  return request(`/api/admin/${adminId}`, {
+    method: 'patch',
+    data: newAdminInfo
+  })
+}
+
 export default {
   getAdmin,
   adminIsExist,
-  addAdmin
+  addAdmin,
+  deleteAdmin,
+  editAdmin
 }
