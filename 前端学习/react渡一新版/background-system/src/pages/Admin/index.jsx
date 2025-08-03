@@ -18,6 +18,8 @@ function Admin(props) {
   const [adminInfo, setAdminInfo] = useState(null);
 
 
+  // 为啥这个地方用的是dispatch？以为管理员信息一般是不会动的，所以我们将管理员信息保存在redux中，这样，
+  // 当管理员列表发生改变的时候，redux中的数据也会改变
   useEffect(() => {
     dispatch({
       type: 'admin/_initAdminList'
