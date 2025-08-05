@@ -1,6 +1,6 @@
 {
   "private": true,
-  "author":"zxh <zxh15166423670@gmail.com>",
+  "author": "zxh <zxh15166423670@gmail.com>",
   "scripts": {
     "dev": "max dev",
     "build": "max build",
@@ -11,6 +11,7 @@
     "start": "npm run dev"
   },
   "dependencies": {
+    "@ant-design/charts": "^1.4.2",
     "@ant-design/icons": "^4.7.0",
     "@ant-design/pro-components": "^2.0.1",
     "@umijs/max": "^4.0.32",
