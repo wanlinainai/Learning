@@ -31,8 +31,22 @@ function editUser(userId, newUserInfo) {
   })
 }
 
+/**
+ * 添加用户
+ * @param {*} userInfo 
+ * @returns 
+ */
+function addUser(userInfo) {
+  userInfo.type = "background";
+  return request('/api/user', {
+    method: 'POST',
+    data: userInfo
+  })
+}
+
 export default {
   getUserByPage,
   deleteUser,
-  editUser
+  editUser,
+  addUser
 }

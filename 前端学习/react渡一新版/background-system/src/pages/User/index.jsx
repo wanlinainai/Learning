@@ -120,7 +120,6 @@ function User(props) {
    * 显示编辑的内容
    */
   function showModal(row) {
-    console.log('row是什么', row);
     setIsModalOpen(true)
     setUserInfo(row);
   }
