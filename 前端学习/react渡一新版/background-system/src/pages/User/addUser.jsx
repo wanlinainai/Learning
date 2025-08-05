@@ -20,12 +20,13 @@ function AddUser(props) {
     intro: ''
   })
 
-  function submitHandle() {
-    UserController.addUser(newUserInfo)
+  const submitHandle = () => {
+    UserController.addUser(newUserInfo);
 
-    navigate('/user/userList')
-    message.success('添加用户成功')
-  }
+    navigate('/user/userList');
+    message.success('添加用户成功');
+  };
+
   return (
     <PageContainer>
       <div className='container' style={{ width: 800 }}>
