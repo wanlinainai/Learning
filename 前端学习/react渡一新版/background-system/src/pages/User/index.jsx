@@ -1,14 +1,18 @@
 import { lighten, PageContainer, ProTable } from '@ant-design/pro-components';
-import { Button, Form, message, Popconfirm, Switch } from 'antd';
+import { Button, Form, message, Modal, Popconfirm, Switch, Tag } from 'antd';
 import { useState, useEffect, useRef } from 'react';
 import UserController from '@/services/user';
 import { useNavigate } from 'react-router-dom';
 import { useAccess, Access } from 'umi';
+import { formatDate } from '@/utils/tools';
 
 function User(props) {
 
   const access = useAccess();
   const actionRef = useRef();
+
+  const [userInfo, setUserInfo] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const navigate = useNavigate();
 
@@ -77,7 +81,7 @@ function User(props) {
       render: (_, row, index, action) => {
         return [
           <div key={row._id}>
-            <Button type='link' size='small' onClick={() => showModal()}>详情</Button>
+            <Button type='link' size='small' onClick={() => showModal(row)}>详情</Button>
             <Button type='link' size='small' onClick={() => navigate(`/user/editUser/${row._id}`)}>编辑</Button>
             {/* 加上删除确认认证 */}
             {/* <Access accessible={access.SuperAdmin}> */}
@@ -96,6 +100,30 @@ function User(props) {
       }
     }
   ]
+
+  /**
+   * 状态切换
+   */
+  function switchChange(row, value) {
+    UserController.editUser(row._id, {
+      enabled: value
+    });
+
+    if (value) {
+      message.success('用户状态已经激活')
+    } else {
+      message.success('该用户已禁用')
+    }
+  }
+
+  /**
+   * 显示编辑的内容
+   */
+  function showModal(row) {
+    console.log('row是什么', row);
+    setIsModalOpen(true)
+    setUserInfo(row);
+  }
 
   /**
    * 删除用户
@@ -118,7 +146,9 @@ function User(props) {
       pageSize
     })
   }
-
+  const handleCancel = () => {
+    setIsModalOpen(false);
+  };
   return (
     <>
       <PageContainer>
@@ -144,6 +174,63 @@ function User(props) {
           }}
         />
       </PageContainer>
+
+      <Modal title={userInfo?.nickname} open={isModalOpen} onCancel={handleCancel} footer={null} style={{ top: 20 }}>
+        <h3>登录账号</h3>
+        <p>
+          <Tag color='red'>{userInfo?.loginId}</Tag>
+        </p>
+        <h3>登录密码</h3>
+        <p>
+          <Tag color='magenta'>{userInfo?.loginPwd}</Tag>
+        </p>
+        <h3>联系方式</h3>
+        <div
+          style={{
+            display: 'flex',
+            width: '350px',
+            justifyContent: 'space-between'
+          }}
+        >
+          <div>
+            <h4>QQ</h4>
+            <p>{userInfo?.qq ? userInfo.qq : "未填写"}</p>
+          </div>
+          <div>
+            <h4>微信</h4>
+            <p>{userInfo?.wechat ? userInfo.wechat : '未填写'}</p>
+          </div>
+          <div>
+            <h4>邮箱</h4>
+            <p>{userInfo?.mail ? userInfo.mail : '未填写'}</p>
+          </div>
+        </div>
+
+        <h3>个人简介</h3>
+        <p>{userInfo?.intro ? userInfo.intro : "未填写"}</p>
+
+        <h3>时间信息</h3>
+        <div
+          style={{
+            display: 'flex',
+            width: '450px',
+            justifyContent: 'space-between'
+          }}
+        >
+          <div>
+            <h4>注册时间</h4>
+            <p>{formatDate(userInfo?.registerDate)}</p>
+          </div>
+
+          <div>
+            <h4>上次登录</h4>
+            <p>{formatDate(userInfo?.lastLoginDate)}</p>
+          </div>
+        </div>
+
+        <h3>当前积分</h3>
+        <p>{userInfo?.points}</p>
+      </Modal>
     </>
   );
 }

@@ -21,7 +21,18 @@ function deleteUser(userId) {
   })
 }
 
+/**
+ * 修改用户
+ */
+function editUser(userId, newUserInfo) {
+  return request(`/api/user/${userId}`, {
+    method: 'PATCH',
+    data: newUserInfo
+  })
+}
+
 export default {
   getUserByPage,
-  deleteUser
+  deleteUser,
+  editUser
 }
