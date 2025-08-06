@@ -40,7 +40,7 @@ const DemoPie = () => {
       offset: '-30%',
       content: ({ type, value }) => `${type}\n${value}`,
       style: {
-        fontSize: 16,
+        fontSize: 10,
         textAlign: 'center',
       },
     },
