@@ -1,12 +1,12 @@
 {
   "private": true,
-  "author": "zxh <zxh15166423670@gmail.com>",
+  "author": "xiejie <745007854@qq.com>",
   "scripts": {
-    "dev": "max dev",
     "build": "max build",
+    "dev": "max dev",
     "format": "prettier --cache --write .",
-    "prepare": "husky install",
     "postinstall": "max setup",
+    "prepare": "husky install",
     "setup": "max setup",
     "start": "npm run dev"
   },
@@ -14,8 +14,10 @@
     "@ant-design/charts": "^1.4.2",
     "@ant-design/icons": "^4.7.0",
     "@ant-design/pro-components": "^2.0.1",
-    "@umijs/max": "^4.0.32",
-    "antd": "^4.20.7"
+    "@toast-ui/react-editor": "^3.2.0",
+    "@umijs/max": "^4.0.24",
+    "antd": "^4.20.7",
+    "react-canvas-nest": "^1.1.1"
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
