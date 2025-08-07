@@ -22,6 +22,17 @@ function BookForm(props) {
 
   const dispatch = useDispatch();
 
+  // 如果是编辑的话，设置DOM的内容是传过来的书籍内容
+  if(type === 'edit') {
+    if(formRef.current && firstIn) {
+      setFirstIn(false);
+      editorRef.current.getInstance().setHTML(bookInfo?.bookIntro)
+    } 
+    if(formRef.current) {
+      formRef.current.setFieldsValue(bookInfo);
+    }
+  }
+
   // 书籍封面
   let bookPicPreview = null;
   if(type === 'edit') {
@@ -62,8 +73,6 @@ function BookForm(props) {
   }
 
   function addHandle() {
-    console.log('走到了');
-    
     const content = editorRef.current.getInstance().getHTML();
     submitHandle(content);
   }

@@ -65,6 +65,12 @@ export default defineConfig({
           name: '添加书籍',
           path: 'addBook',
           component: './Book/addBook'
+        },
+        {
+          name: '编辑书籍',
+          path: 'editBook/:id',
+          component: './Book/editBook',
+          hideInMenu: true
         }
       ]
     },
