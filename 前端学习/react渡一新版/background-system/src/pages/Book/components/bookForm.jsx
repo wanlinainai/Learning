@@ -1,8 +1,11 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { Editor } from '@toast-ui/react-editor';
+import '@toast-ui/editor/dist/toastui-editor.css';
+import '@toast-ui/editor/dist/i18n/zh-cn';
 import { Button, Form, Image, Input, Select, Upload } from 'antd';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {useDispatch, useSelector} from '@umijs/max';
+import {typeOptionCreator} from '../../../utils/tools';
 
 /**
  * 新增书籍组件
@@ -59,6 +62,8 @@ function BookForm(props) {
   }
 
   function addHandle() {
+    console.log('走到了');
+    
     const content = editorRef.current.getInstance().getHTML();
     submitHandle(content);
   }
@@ -86,13 +91,12 @@ function BookForm(props) {
           rules={[{required: true, message:"请输入书籍相关的介绍"}]}
         >
           <Editor 
-            initialValues=""
+            initialValue=""
             previewStyle="vertical"
             height="600px"
             initialEditType="markdown"
             useCommandShortcut={true}
             language="zh-CN"
-            placeholder="请输入书籍相关的介绍"
             ref={editorRef}
           />
         </Form.Item>
@@ -114,7 +118,7 @@ function BookForm(props) {
           label="所需积分"
           name="requirePoints"
           rules={[
-            {require: true, message: '请选择下载需要的积分'}
+            {required: true, message: '请选择下载需要的积分'}
           ]}
         >
           <Select style={{width: 200}} onChange={handlePointChange}>
@@ -143,7 +147,7 @@ function BookForm(props) {
           valuePropName='fileList'
         >
           <Upload
-            action="/api/uplaod"
+            action="/api/upload"
             listType='picture-card'
             maxCount={1}
             onChange={(e) => {

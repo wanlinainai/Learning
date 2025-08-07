@@ -62,3 +62,22 @@ export function formatDate(timestamp) {
     week
   );
 }
+
+/**
+ * 批量创建下拉列表中的option
+ */
+export function typeOptionCreator(Select, typeList) {
+  let optionContainer = [];
+  for (let option of typeList) {
+    optionContainer.push(
+      <Select.Option
+        value={option._id}
+        key={option._id}
+      >
+        {option.typeName}
+      </Select.Option>
+    )
+  }
+
+  return optionContainer;
+}
