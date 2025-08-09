@@ -87,6 +87,16 @@ export default defineConfig({
           name: '添加面试题',
           path: 'addInterview',
           component: './Interview/addInterview'
+        }, {
+          name: '题目详情',
+          path: 'interviewDetail/:id',
+          component: './Interview/interviewDetail',
+          hideInMenu: true
+        }, {
+          name: '编辑题目',
+          path: 'editInterview/:id',
+          component: './Interview/editInterview',
+          hideInMenu: true
         }
       ]
     },
