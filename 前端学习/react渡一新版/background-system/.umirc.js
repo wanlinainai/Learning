@@ -104,35 +104,19 @@ export default defineConfig({
       name: "问答",
       path: "/issue",
       icon: 'FormOutlined',
-      routes: [
-        {
-          name: '问答列表',
-          path: 'issueList',
-          component: './Issue'
-        },
-        {
-          name: '添加问答',
-          path: 'addIssue',
-          component: './Issue/addIssue'
-        }
-      ]
+      component: './Issue'
+    },
+    {
+      name: '问答详情',
+      path: '/issue/:id',
+      hideInMenu: true,
+      component: './Issue/issueDetail'
     },
     {
       name: '评论',
       path: "/comment",
       icon: 'CommentOutlined',
-      routes: [
-        {
-          name: '评论列表',
-          path: 'commentList',
-          component: './Comment'
-        },
-        {
-          name: '添加评论',
-          path: 'addComment',
-          component: './Comment/addComment'
-        }
-      ]
+      component: './Comment'
     },
     {
       name: '类型',
