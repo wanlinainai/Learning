@@ -123,7 +123,7 @@ function Interview(props) {
             <Button
               type='link'
               size='small'
-              onClick={() => navigate(`/interview/interviewList/${row._id}`)}
+              onClick={() => navigate(`/interview/interviewDetail/${row._id}`)}
             > 详情 </Button>
             <Button
               type='link'
