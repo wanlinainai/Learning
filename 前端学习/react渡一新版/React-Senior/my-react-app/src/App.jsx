@@ -1,33 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { MyContext1, MyContext2 } from './context';
+import ChildCom1 from './components/ChildCom1';
+
 
 function App(props) {
 
-    const [counter, setCounter] = useState(1);
-
-    // 使用 useRef 来保存定时器的 id
-    let timer = useRef(null);
-
-    useEffect(() => {
-        timer.current = setInterval(() => {
-            console.log('触发了');
-        }, 1000)
-    }, [])
-
-    const clearTimer = () => {
-        clearInterval(timer.current)
-    }
-
-    // 点击 +1
-    function clickHandle() {
-        console.log(timer)
-        setCounter(counter + 1);
-    }
     return (
-        <div>
-            <div>{counter}</div>
-            <button onClick={clickHandle}>+1</button>
-            <button onClick={clearTimer}>停止</button>
-        </div>
+        <MyContext1.Provider value={{ a: 1, b: 2, c: 3 }}>
+            <MyContext2.Provider value={{ a: 100, b: 200, c: 300 }}>
+                <div>
+                    <ChildCom1 />
+                </div>
+            </MyContext2.Provider>
+        </MyContext1.Provider>
     );
 }
 
