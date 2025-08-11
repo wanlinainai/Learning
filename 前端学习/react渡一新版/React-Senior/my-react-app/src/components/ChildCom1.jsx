@@ -1,13 +1,12 @@
-import React from 'react';
-import ChildCom2 from './ChildCom2';
-import ChildCom3 from './ChildCom3';
-
-function ChildCom1() {
+function ChildCom1(props) {
   return (
-    <div>
-      ChildCom1
-      <ChildCom2 />
-      <ChildCom3 />
+    <div style={{
+      width: '400px',
+      height: '400px',
+      backgroundColor: 'red'
+    }} onMouseMove={props.mouseMoveHandle}>
+      <h1>鼠标移动</h1>
+      <p>当前鼠标的位置: x{props.points.x}  y{props.points.y}</p>
     </div>
   );
 }

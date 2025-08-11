@@ -230,3 +230,157 @@ export default ChildCom3;
 ![image-20250811010255177](images/React 高级/image-20250811010255177.png)
 
 > 如果在Consumer中使用的时候使用不同的context，最终的效果是按照每一个上下文环境的内容进行展示的，如果使用的是一样的context，最终展示的最近的，类似于作用域。
+
+### Render Props
+
+在React中，常见的两种方式进行横切面的抽离
+
+- 高阶组件（HOC）
+- Render Props
+
+#### Render Props
+
+我们有两个组件：`ChildCom1`、`ChildCom2`。
+
+```jsx
+function ChildCom1(props) {
+  return (
+    <div style={{
+      width: '400px',
+      height: '400px',
+      backgroundColor: 'red'
+    }} onMouseMove={props.mouseMoveHandle}>
+      <h1>鼠标移动</h1>
+      <p>当前鼠标的位置: x{props.points.x}  y{props.points.y}</p>
+    </div>
+  );
+}
+
+export default ChildCom1;
+
+
+
+function ChildCom2(props) {
+  return (
+    <div style={{
+      width: '400px',
+      height: '400px',
+      backgroundColor: 'grey',
+      position: 'relative',
+      overflow: 'hidden'
+    }}
+      onMouseMove={props.mouseMoveHandle}
+    >
+      <h1>移动鼠标</h1>
+      <div style={{
+        width: '15px',
+        height: '15px',
+        borderRadius: '50%',
+        backgroundColor: 'black',
+        position: 'absolute',
+        left: props.points.x - 5 - 450,
+        top: props.points.y - 5 - 12
+      }}>
+
+      </div>
+    </div>
+  );
+}
+
+export default ChildCom2;
+```
+
+以下是我们的App组件
+
+```jsx
+import ChildCom1 from './components/ChildCom1';
+import ChildCom2 from './components/ChildCom2';
+import withMouseMove from './HOC/withMouseMove';
+
+function App(props) {
+
+    return (
+        <div style={{
+            display: 'flex',
+            justifyContent: 'space-around',
+            width: '850px'
+        }}>
+            {/* <ChildCom1 /
+            <ChildCom2 /> */}
+            <MouseMove render={(props) => <ChildCom1 {...props}/>} />
+            <MouseMove render={(props) => <ChildCom2 {...props}/>} />
+        </div>
+    );
+}
+
+export default App;
+```
+
+效果：![image-20250811235917760](images/React 高级/image-20250811235917760.png)
+
+#### HOC 高阶组件
+
+```javascript
+import { useState } from "react"
+
+function withMouseMove(Com) {
+  return function NewCom() {
+    const [points, setPoints] = useState({
+      x: 0,
+      y: 0
+    })
+
+    function mouseMoveHandle(e) {
+      setPoints({
+        x: e.clientX,
+        y: e.clientY
+      })
+
+    }
+
+    const mousemove = { points, mouseMoveHandle }
+
+    return <Com {...mousemove} />
+  }
+}
+
+export default withMouseMove
+```
+
+App组件修改：
+
+```jsx
+import ChildCom1 from './components/ChildCom1';
+import ChildCom2 from './components/ChildCom2';
+import withMouseMove from './HOC/withMouseMove';
+
+function App(props) {
+
+    return (
+        <div style={{
+            display: 'flex',
+            justifyContent: 'space-around',
+            width: '850px'
+        }}>
+            {/* <ChildCom1 /
+            <ChildCom2 /> */}
+            <NewChildCom1 />
+            <NewChildCom2 />
+        </div>
+    );
+}
+
+export default App;
+```
+
+虽然这个技巧的名字叫做Render Props，但不是说必须叫做render = {...}，**<u>封装公共逻辑的组件只要能得到渲染的视图即可</u>**。
+
+
+
+
+
+> 什么时候用HOC？什么时候用Render Props?
+>
+> 一般来说，<u>Render Props应用于组件之间功能逻辑完全相同，仅仅只是渲染的逻辑不同。</u>这个时候可以通过Render Props来处理；
+>
+> HOC一般是抽取部分公共逻辑，其余组件之间还有一部分逻辑是不同的，这个时候HOC比较合适。

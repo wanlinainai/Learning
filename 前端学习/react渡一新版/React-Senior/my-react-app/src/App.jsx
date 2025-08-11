@@ -1,17 +1,26 @@
-import { MyContext1, MyContext2 } from './context';
 import ChildCom1 from './components/ChildCom1';
+import ChildCom2 from './components/ChildCom2';
+import withMouseMove from './HOC/withMouseMove';
 
+const NewChildCom1 = withMouseMove(ChildCom1);
+const NewChildCom2 = withMouseMove(ChildCom2);
 
 function App(props) {
 
     return (
-        <MyContext1.Provider value={{ a: 1, b: 2, c: 3 }}>
-            <MyContext2.Provider value={{ a: 100, b: 200, c: 300 }}>
-                <div>
-                    <ChildCom1 />
-                </div>
-            </MyContext2.Provider>
-        </MyContext1.Provider>
+        <div style={{
+            display: 'flex',
+            justifyContent: 'space-around',
+            width: '850px'
+        }}>
+            {/* <ChildCom1 /
+            <ChildCom2 /> */}
+            {/* <MouseMove render={(props) => <ChildCom1 {...props}/>} />
+            <MouseMove render={(props) => <ChildCom2 {...props}/>} /> */}
+
+            <NewChildCom1 />
+            <NewChildCom2 />
+        </div>
     );
 }
 

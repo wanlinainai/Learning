@@ -1,27 +1,27 @@
-import React from 'react';
-import { MyContext1, MyContext2 } from '../context';
-
 function ChildCom2(props) {
   return (
-    <MyContext1.Consumer>
-      {(context1) => {
-        return <MyContext2.Consumer>
-          {
-            (context2) => (
-              <div>
-                ChildCom2
-                <div>a: {context1.a}</div>
-                <div>b: {context1.b}</div>
-                <div>c: {context1.c}</div>
-                <div>a: {context1.a}</div>
-                <div>b: {context2.b}</div>
-                <div>c: {context2.c}</div>
-              </div>
-            )
-          }
-        </MyContext2.Consumer>
-      }}
-    </MyContext1.Consumer>
+    <div style={{
+      width: '400px',
+      height: '400px',
+      backgroundColor: 'grey',
+      position: 'relative',
+      overflow: 'hidden'
+    }}
+      onMouseMove={props.mouseMoveHandle}
+    >
+      <h1>移动鼠标</h1>
+      <div style={{
+        width: '15px',
+        height: '15px',
+        borderRadius: '50%',
+        backgroundColor: 'black',
+        position: 'absolute',
+        left: props.points.x - 5 - 450,
+        top: props.points.y - 5 - 12
+      }}>
+
+      </div>
+    </div>
   );
 }
 
