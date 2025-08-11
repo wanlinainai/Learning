@@ -1,27 +1,25 @@
-import ChildCom1 from './components/ChildCom1';
-import ChildCom2 from './components/ChildCom2';
-import withMouseMove from './HOC/withMouseMove';
-
-const NewChildCom1 = withMouseMove(ChildCom1);
-const NewChildCom2 = withMouseMove(ChildCom2);
+import { useState } from 'react';
+import Modal from './components/Modal';
 
 function App(props) {
 
-    return (
-        <div style={{
-            display: 'flex',
-            justifyContent: 'space-around',
-            width: '850px'
-        }}>
-            {/* <ChildCom1 /
-            <ChildCom2 /> */}
-            {/* <MouseMove render={(props) => <ChildCom1 {...props}/>} />
-            <MouseMove render={(props) => <ChildCom2 {...props}/>} /> */}
+  const [isShow, setIsShow] = useState(false);
 
-            <NewChildCom1 />
-            <NewChildCom2 />
-        </div>
-    );
+
+  return (
+    <div id='root'>
+      <div style={{
+        position: 'relative',
+      }}>
+        <h1>App组件</h1>
+        <button onClick={() => setIsShow(!isShow)}>显示/隐藏</button>
+        {isShow ? <Modal /> : null}
+      </div>
+
+      <div id='modal'></div>
+    </div>
+
+  );
 }
 
 export default App;

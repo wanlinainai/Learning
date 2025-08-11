@@ -375,12 +375,92 @@ export default App;
 
 虽然这个技巧的名字叫做Render Props，但不是说必须叫做render = {...}，**<u>封装公共逻辑的组件只要能得到渲染的视图即可</u>**。
 
-
-
-
-
 > 什么时候用HOC？什么时候用Render Props?
 >
 > 一般来说，<u>Render Props应用于组件之间功能逻辑完全相同，仅仅只是渲染的逻辑不同。</u>这个时候可以通过Render Props来处理；
 >
 > HOC一般是抽取部分公共逻辑，其余组件之间还有一部分逻辑是不同的，这个时候HOC比较合适。
+
+### Portals
+
+Portals成为传送门。官方的意思是：
+
+> Portal提供了一种将子节点渲染到存在与父组件以外的DOM节点优秀方案。
+
+语法为：
+
+```jsx
+ReactDom.createPortal(child, contianer);
+```
+
+第一个参数是需要渲染的子节点。第二个参数是一个要渲染的位置DOM节点。
+
+#### 什么情况下使用Portals
+
+```jsx
+import { useState } from 'react';
+import Modal from './components/Modal';
+
+function App(props) {
+
+  const [isShow, setIsShow] = useState(false);
+
+
+  return (
+    <div id='root'>
+      <div style={{
+        position: 'relative',
+      }}>
+        <h1>App组件</h1>
+        <button onClick={() => setIsShow(!isShow)}>显示/隐藏</button>
+        {isShow ? <Modal /> : null}
+      </div>
+
+      <div id='modal'></div>
+    </div>
+
+  );
+}
+
+export default App;
+```
+
+Modal.jsx
+
+```jsx
+import React from 'react';
+import { createPortal } from 'react-dom';
+function Modal(props) {
+  // 之前是直接返回的JSX。现在我们通过Portals指定JSX渲染的位置
+
+  return createPortal((<div style={{
+    width: '450px',
+    height: '250px',
+    border: '1px solid',
+    position: 'absolute',
+    left: 'calc(50% - 225px)',
+    top: 'calc(50% - 125px)',
+    textAlign: 'center',
+    lineHeight: '250px'
+  }}>
+    模态框
+  </div>), document.getElementById('modal'));
+}
+
+export default Modal;
+```
+
+效果如图：
+
+![image-20250812003256252](images/React 高级/image-20250812003256252.png)
+
+可以发现这个modal和有样式的div在同一个层级。
+
+#### 事件冒泡
+
+尽管Portal被放在DOM树任何位置，但是在React组件树中还是React中。与DOM树中的位置无关，无论子节点是否是portal，像类似于Context这样的功能都是不变的。
+
+![image-20250812003523761](images/React 高级/image-20250812003523761.png)
+
+
+
