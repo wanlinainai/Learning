@@ -221,3 +221,135 @@ let f3: boolean = f();
 上述示例中，函数f()会抛出错误。
 
 为什么never可以赋值给其他类型呢？和集合论有关，空集是任何集合的子集，Typescript就规定了，任何类型都包含了`never`类型。
+
+## 数组
+
+根本特征：所有的成员类型必须相同，但是成员数量是不固定的。
+
+数组类型的定义有两种方式：第一种在类型后加上[]。
+
+```typescript
+let arr: number[] = [1,2,3];
+```
+
+```typescript
+let arr: (number | string)[];
+```
+
+第二种是利用Array接口。
+
+```typescript
+let arr: Array<number> = [1,2,3]
+```
+
+```typescript
+let arr: Array<number | string>;
+```
+
+上述写法属于泛型。
+
+由于数组成员是可以动态变化的，所以TS并不会对数组边界进行检查，越界访问不会报错。
+
+```typescript
+let arr: number[] = [1,2,3]
+let foo = arr[3]; // 正确
+```
+
+上述示例中，变量`foo`的值是一个不存在的 数组成员，TS不会报错。
+
+TS允许使用方括号读取数组成员类型。
+
+```typescript
+type Names = string[];
+type Name = Names[0]; // string
+```
+
+Names是string数组，那么Name就是string类型。
+
+```typescript
+type Names = string[];
+type Name = Names[number];
+```
+
+上述表示数组Names所有数值索引成员类型，返回的是string.
+
+### 数组类型判断
+
+如果数组类型没有声明，TS会推断数组成员的类型，此时，推断行为会因为值的不同，而有所不同。
+
+如果数组初始化是空数组，那么TS判断数组类型是any[]。
+
+```typescript
+const arr = []; // 推断是any[]
+```
+
+之后赋值的时候，TS会自动更新类型判断。
+
+```typescript
+const arr = [];
+arr; // any[]类型
+
+arr.push(1);
+arr // number类型
+
+arr.push('hello');
+arr // number | string类型
+```
+
+### 只读数组，const 断言
+
+TS允许声明只读数组，方法是在数组类型之前加上`readonly`关键字。
+
+```typescript
+const readonlyArr: readonly number[] = [1, 2, 3];
+readonlyArr[1] = 2;// 报错
+readonlyArr.push(4); // 报错
+delete readonlyArr[0]; // 报错
+```
+
+上述数组内容增加、修改、删除都会报错。
+
+TS中的只读数组和数组视为两种类型，后者是前者的子类型。
+
+只读数组中没有push、pop之类的改变数组的方法，所以number[]的方法数量要多于readonly number[]。
+
+TS提供了两个专门的泛型，用来生成只读数组的类型。
+
+```typescript
+const a1: ReadonlyArray<number> = [0, 1];
+const a2: Readonly<number[]> = [0, 1];
+```
+
+还有一种声明只读数组的方法：
+
+```typescript
+const arr = [0, 1] as const 
+arr[0] = [2]; // 报错；
+```
+
+### 多维数组
+
+```typescript
+let multi: number[][] = [[1,2,3], [4,5,6]]
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

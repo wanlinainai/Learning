@@ -30,18 +30,18 @@ x2 = "hello";
 
 // 报错：不能赋值给其他的变量，除了any和unknown
 let v: unknown = 123;
-let v1: boolean = v;
-let v2: number = v;
+// let v1: boolean = v;
+// let v2: number = v;
 
 // 报错： 不能直接调用unknown的方法和属性
 let n1: unknown = { foo: 123 };
-n.foo; // 报错
+// n.foo; // 报错
 
 let n2: unknown = 'heool';
-n2.trim(); // 报错
+// n2.trim(); // 报错
 
 let n3: unknown = (n = 0) => n + 1;
-n3(); // 报错
+// n3(); // 报错
 
 
 

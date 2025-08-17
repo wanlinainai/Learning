@@ -1,7 +1,8 @@
 {
   "files": [
     "test.ts",
-    "any.ts"
+    "any.ts",
+    "array.ts"
   ],
   "compilerOptions": {
     "outFile": "dist/test.js"
