@@ -1,0 +1,9 @@
+{
+  "files": [
+    "test.ts",
+    "any.ts"
+  ],
+  "compilerOptions": {
+    "outFile": "dist/test.js"
+  }
+}
