@@ -352,3 +352,117 @@ Failed to parse source map from 'E:\github_repository\Learning\前端学习\reac
 一般来说这种问题是服务器端做了处理导致的，如果使用自己的OSS的话不会出现，或者是Base64的话不会出现。
 
 
+
+
+
+## 搞机片
+
+### 属性默认值和类型验证
+
+
+
+
+
+
+
+
+
+针对props是数组或者对象时，如果要验证的不只是数组或者是对象类型，而是要验证数组或对象中的 每一项，可以使用`arrayOf`或`objectOf`验证器。
+
+比如，我们现在需要验证数组中的每一项都是数字，验证器实例如下：
+
+```javascript
+score : PropTypes.arrayOf(function (propValue, key, componentName, location, prpoFullName)) {
+     console.log(propValue, key, componentName, location, prpoFullName);
+	if(typeof propValue[key] !== 'number') {
+        return new Error('Invalid prop `' + propFullName + '` supplied to' +
+        ' `' + componentName + '`. Validation failed.')
+    }					
+ }
+```
+
+子组件中的props是无法通过验证的。
+
+```jsx
+<ChildCom name="Trump" age={80} score={[98, '99', 100]}></ChildCom>
+```
+
+score对应的每一项都应该是数字number。
+
+#### 插槽的验证
+
+插槽也是通过props来实现的。
+
+针对于插槽，使用`prop-types`可以进行插槽元素的单一认证，
+
+```jsx
+function ChildCom(props) {
+    return (
+    	<div>
+        	此处为插槽
+            {props.children}
+        </div>
+    )
+}
+
+ChildCom.propTypes = {
+    children: PropTypes.element.isRequired
+}
+export default ChildCom;
+```
+
+在上面的实例中，我们为ChildCom组件设置了一个插槽，并且设置了一个验证，要求在父组件中使用ChildCom子组件时，必须插入一个根元素。
+
+### 高阶组件
+
+高阶组件全称是：`Higher-Order Components`，简称`HOC`。是React的一种复用逻辑技巧。
+
+- 认识到高阶组件并非是一个组件，而是增强组件功能的一个函数。
+- 高阶组件的作用是对多个组件公共逻辑进行横向抽离。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
