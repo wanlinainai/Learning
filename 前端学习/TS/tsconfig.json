@@ -2,9 +2,16 @@
   "files": [
     "test.ts",
     "any.ts",
-    "array.ts"
+    "array.ts",
+    "symbol.ts",
+    "function.ts"
   ],
   "compilerOptions": {
-    "outFile": "dist/test.js"
+    "outFile": "dist/test.js",
+    "target": "es2015",
+    "lib": [
+      "es2015",
+      "dom"
+    ]
   }
 }

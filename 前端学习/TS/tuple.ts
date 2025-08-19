@@ -30,10 +30,12 @@
 
 
 // 父子类型
-type t1 = readonly[number, string]
-type t2 = [number, string]
+// type t1 = readonly[number, string]
+// type t2 = [number, string]
 
-let x: t2 = [1, 'a']
-let y: t1 = x;
+// let x: t2 = [1, 'a']
+// let y: t1 = x;
 
-x = y;
+// x = y;
+
+

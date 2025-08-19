@@ -436,13 +436,170 @@ let y: t1 = x;
 x = y;
 ```
 
+## Symbol类型
 
+### Symbol简介
 
+Symbol是ES2015新引入的一个原始类型的值，类似于字符传，但是每一个Symbol都是独一无二的，与其他任何值都不相同。
 
+Symbol值通过`Symbol()`函数生成，在TS中，Symbol类型使用`symbol`表示。
 
+```typescript
+// Symbol
+let x: symbol = Symbol();
+let y: symbol = Symbol();
 
+console.log(x === y) // false
+```
 
+### Unique symbol
 
+`symbol`类型包含所有的Symbol的值，但是无法表示某一个具体的Symbol的值。
+
+TS中有一哥`unique symbol`，表示单个的、某一个具体的Symbol的值。
+
+因为`unique symbol`表示单个值，所以这个类型的变量是不能修改值的，只能用`const`声明，不能用`let`声明。
+
+```typescript
+const x: unique symbol = Symbol();
+const y: unique symbol = Symbol();
+```
+
+const为变量赋值Symbol值时，变量类型默认就是`unique symbol`，类型可以不写。
+
+```typescript
+const x: unique symbol = Symbol();
+// 等同于
+const x = Symbol();
+```
+
+相同参数的`Symbol.for()`方法会返回相同的Symbol值。TypeScript目前无法识别这种情况，所以可能出现多个unique symbol类型的变量等于同一个Symbol的值的情况。
+
+## Function
+
+### 简介
+
+模板：
+
+```typescript
+function hello (txt: string) :void {
+  console.log('hello')
+}
+```
+
+返回值类型通常可以不写。
+
+```typescript
+function hello(txt: string) {
+  console.log(txt)
+}
+```
+
+如果变量被赋值为一个函数，变量类型有两种写法：
+
+```typescript
+// 一
+const n1 = function (txt: string) {
+  console.log('hello' + txt)
+}
+
+// 二
+const n2: (txt: string) => void
+  = function (txt) {
+    console.log('hello2' + txt)
+  }
+
+// 函数类型中的参数名和实际参数名可以不同
+let f: (x: string) => number;
+
+f = function (str: string) {
+  return 1
+}
+```
+
+函数类型中的参数名和实际参数名可以不一致。
+
+```typescript
+let f: (x: string) => number;
+
+f = function (str: string) {
+  return 1
+}
+```
+
+如果函数类型定义很冗长，或者多个函数使用一个类型，写法二使用起来很麻烦。通常用`type`命令为函数类型定义一个别名，便于指定给其他变量。
+
+```typescript
+type MyFunc = (txt: string) => void;
+const func: MyFunc = function (txt) {
+  console.log('自定义类型函数')
+}
+```
+
+函数的实际参数个数，可以少于类型指定的参数个数，但是不能多于，即TS允许省略参数。
+
+```typescript
+let myFunc: (a: number, b: number) => number;
+
+myFunc = (a: number) => a;
+
+myFunc = (a: number, b: number, c: number) => a + b + c; // 报错
+```
+
+这是因为JS函数在声明过程中往往有多于参数，实际使用可以只传入一部分参数。比如，数组的`forEach()`方法的参数是一个函数，该函数默认有三个参数`(item, index, array) => void`，实际上往往只使用第一个参数`(item) => void`，TS中也允许传入的参数不足。
+
+**如果一个变量要套用另一个函数类型，可以使用`typeof`运算符。**
+
+```typescript
+function add(x: number, y: number) {
+  return x + y;
+}
+
+const myAdd: typeof add = function (x, y) {
+  return x + y;
+}
+```
+
+这是一个很有用的技巧，任何需要类型的地方，都可以使用`typeof`运算符从一个值获取类型。
+
+### Function类型
+
+TS提供Function类型表示函数，任何函数都属于这个类型。
+
+```typescript
+function doSomething(f: Function) {
+  return f(1, 2, 3)
+}
+```
+
+f就是一个函数类型，代表这是一个函数。
+
+Function类型的值都可以直接执行。
+
+Function类型的函数都可以接受任意数量的参数，每个参数的类型都是`any`，返回值的类型也是`any`，没有任何约束，不建议使用这个类型。
+
+### 箭头函数
+
+普通函数的简化版本。
+
+```typescript
+const repeat = (
+  str: string,
+  times: number
+): string => str.repeat(times);
+```
+
+上面的示例中，变量`repeat`被赋值为一个箭头函数。
+
+```typescript
+function greet(
+  fn: (a: string) => void
+): void {
+  fn('world')
+}
+```
+
+`fn`是一个函数，类型用箭头函数表示。fn的返回值类型写在箭头右侧。
 
 
 
