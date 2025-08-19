@@ -333,6 +333,109 @@ arr[0] = [2]; // 报错；
 let multi: number[][] = [[1,2,3], [4,5,6]]
 ```
 
+## 元组（tuple）
+
+元组是TS特有的数据类型，JS中没有这个这种类型。他表示成员类型可以自由设置的数组，数组的各个成员类型可以不同。
+
+由于成员类型不同，元组必须声明每一个成员的类型。
+
+```typescript
+const s: [string, number, boolean] = ['a', 1, true]
+```
+
+元组和数组的一个重大的区别就是：元组的声明类型需要在方括号内部`[number]`。数组是在外侧：`number[]`
+
+```typescript
+// 数组
+const arr: number[] = [1]
+// 元组
+const tuple: [number] = [1]
+```
+
+并且元祖的每一项都需要指定具体的数据类型。
+
+```typescript
+const tuple: [number, number] = [1, 2]
+```
+
+元组的类型声明不能省略，省略之后TS就会认为这是个数组类型，自动设置上对应的类型。
+
+```typescript
+let a = [1, true];// 这个就是TS自动认为是(number | boolean)[]类型的数组
+```
+
+元祖成员类型可以通过添加后缀：`?`表示成员是可选的，
+
+```typescript
+let a: [number, number?] = [1];
+```
+
+可选成员只能是位于尾部的成员。
+
+```typescript
+let a: [number, string?, number] // 错误
+```
+
+由于需要声明每一个成员的类型，所以绝大多数情况下，元组的数量是有限的。
+
+```typescript
+let x: [string, string] = ['a', 'b'];
+
+x[2] = 'c' // 报错
+```
+
+使用`...`扩展符可以表示不限成员数量的元组。
+
+```typescript
+type NamedNums = [
+  string,
+  ...number[]
+];
+
+const a: NamedNums = ['a', 1, 2, 3]
+const b: NamedNums = ['b', 1];
+```
+
+`...`扩展运算符用在元祖的任何位置都可以，后面只能跟上数组或元祖。
+
+```typescript
+type t1 = [string, ...number[], number];
+
+type t2 = [string, ...boolean[]]
+```
+
+如果不明确元组成员的类型和数量，可以写成以下的内容：
+
+```typescript
+type tuple = [...any[]];
+```
+
+### 只读元组
+
+元组也可以是只读的，不能修改，有两种写法。
+
+```typescript
+// 写法一
+type t = readonly [number, number];
+
+// 写法二
+type t2 = Readonly<[number, number]>
+```
+
+写法二用到了工具类型：`Readonly`。
+
+与数组一样，只读元组是元组的父类型。元组可以替换只读元组，而只读元组不能替换元组。
+
+```typescript
+type t1 = readonly[number, string]
+type t2 = [number, string]
+
+let x: t2 = [1, 'a']
+let y: t1 = x;
+
+x = y;
+```
+
 
 
 
