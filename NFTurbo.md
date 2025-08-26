@@ -372,3 +372,372 @@ Java中的assert是用于程序调试的，但是Assert这个类是一种快速�
 
 ### 分布式锁
 
+项目中使用分布式锁注解进行处理各种锁处理。
+
+注解：`@DistributeLock`（分布式锁）
+
+```java
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface DistributeLock {
+
+    /**
+     * 锁的场景
+     *
+     * @return
+     */
+    public String scene();
+
+    /**
+     * 加锁的key，优先取key()，如果没有，则取keyExpression()
+     *
+     * @return
+     */
+    public String key() default DistributeLockConstant.NONE_KEY;
+
+    /**
+     * SPEL表达式:
+     * <pre>
+     *     #id
+     *     #insertResult.id
+     * </pre>
+     *
+     * @return
+     */
+    public String keyExpression() default DistributeLockConstant.NONE_KEY;
+
+    /**
+     * 超时时间，毫秒
+     * 默认情况下不设置超时时间，会自动续期
+     *
+     * @return
+     */
+    public int expireTime() default DistributeLockConstant.DEFAULT_EXPIRE_TIME;
+
+    /**
+     * 加锁等待时长，毫秒
+     * 默认情况下不设置等待时长，会一直等待直到获取到锁
+     * @return
+     */
+    public int waitTime() default DistributeLockConstant.DEFAULT_WAIT_TIME;
+}
+```
+
+切面类：`DistributeLockAspect`
+
+```java
+@Aspect
+@Component
+@Order(Integer.MIN_VALUE + 1)
+public class DistributeLockAspect {
+
+    private RedissonClient redissonClient;
+
+    public DistributeLockAspect(RedissonClient redissonClient) {
+        this.redissonClient = redissonClient;
+    }
+
+    private static final Logger LOG = LoggerFactory.getLogger(DistributeLockAspect.class);
+
+    @Around("@annotation(cn.hollis.nft.turbo.lock.DistributeLock)")
+    public Object process(ProceedingJoinPoint pjp) throws Exception {
+        Object response = null;
+        Method method = ((MethodSignature) pjp.getSignature()).getMethod();
+        DistributeLock distributeLock = method.getAnnotation(DistributeLock.class);
+
+        String key = distributeLock.key();
+        // Key值为空
+        if (DistributeLockConstant.NONE_KEY.equals(key)) {
+            if (DistributeLockConstant.NONE_KEY.equals(distributeLock.keyExpression())) {
+                throw new DistributeLockException("no lock key found...");
+            }
+            SpelExpressionParser parser = new SpelExpressionParser();
+            Expression expression = parser.parseExpression(distributeLock.keyExpression());
+
+            EvaluationContext context = new StandardEvaluationContext();
+            // 获取参数值
+            Object[] args = pjp.getArgs();
+
+            // 获取运行时参数的名称
+            StandardReflectionParameterNameDiscoverer discoverer
+                    = new StandardReflectionParameterNameDiscoverer();
+            String[] parameterNames = discoverer.getParameterNames(method);
+
+            // 将参数绑定到context中
+            if (parameterNames != null) {
+                for (int i = 0; i < parameterNames.length; i++) {
+                    context.setVariable(parameterNames[i], args[i]);
+                }
+            }
+
+            // 解析表达式，获取结果
+            key = String.valueOf(expression.getValue(context));
+        }
+
+        String scene = distributeLock.scene();
+
+        String lockKey = scene + "#" + key;
+
+        int expireTime = distributeLock.expireTime();
+        int waitTime = distributeLock.waitTime();
+        RLock rLock= redissonClient.getLock(lockKey);
+        try {
+            boolean lockResult = false;
+            // 如果没有设置waitTime：
+            // 1. 过期时间是默认值，使用RLock.lock()无限续期，类似于watchdog机制
+            // 2. 设置了过期时间，RLock.lock(expireTime, TimeUnit.MILLISECONDS)，锁会在过期时间之后自动释放
+
+            // 如果设置了waitTime：
+            // 1. 过期时间是默认值，使用RLock.tryLock(waitTime, TimeUnit.MILLISECONDS)，锁会在waitTime内尝试获取锁，如果获取锁失败，则返回false
+            // 2. 设置了过期时间，使用RLock.tryLock(waitTime, expireTime, TimeUnit.MILLISECONDS)，锁会在waitTime内尝试获取锁，如果获取锁失败，则返回false
+            if (waitTime == DistributeLockConstant.DEFAULT_WAIT_TIME) {
+                if (expireTime == DistributeLockConstant.DEFAULT_EXPIRE_TIME) {
+                    LOG.info(String.format("lock for key : %s", lockKey));
+                    rLock.lock();
+                } else {
+                    LOG.info(String.format("lock for key : %s , expire : %s", lockKey, expireTime));
+                    rLock.lock(expireTime, TimeUnit.MILLISECONDS);
+                }
+                lockResult = true;
+            } else {
+                if (expireTime == DistributeLockConstant.DEFAULT_EXPIRE_TIME) {
+                    LOG.info(String.format("try lock for key : %s , wait : %s", lockKey, waitTime));
+                    lockResult = rLock.tryLock(waitTime, TimeUnit.MILLISECONDS);
+                } else {
+                    LOG.info(String.format("try lock for key : %s , expire : %s , wait : %s", lockKey, expireTime, waitTime));
+                    lockResult = rLock.tryLock(waitTime, expireTime, TimeUnit.MILLISECONDS);
+                }
+            }
+
+            if (!lockResult) {
+                LOG.warn(String.format("lock failed for key : %s , expire : %s", lockKey, expireTime));
+                throw new DistributeLockException("acquire lock failed... key : " + lockKey);
+            }
+
+
+            LOG.info(String.format("lock success for key : %s , expire : %s", lockKey, expireTime));
+            response = pjp.proceed();
+        } catch (Throwable e) {
+            throw new Exception(e);
+        } finally {
+            if (rLock.isHeldByCurrentThread()) {
+                rLock.unlock();
+                LOG.info(String.format("unlock for key : %s , expire : %s", lockKey, expireTime));
+            }
+        }
+        return response;
+    }
+}
+```
+
+### Gateway网关
+
+微服务中用于**路由请求、转发、过滤等功能**
+
+一般来说，会单独创建一个模块，gateway-module。这个模块包含了：
+
+- config
+  - 配置中心组件，用于服务的发现，可以实现路由和负载均衡
+- 鉴权
+  - 在网关中进行同意鉴权，我们引入的是Sa-Token
+- 负载均衡
+  - LoadBalancer。起到负载均衡的作用
+- 日志
+  - 用于记录日志和日志脱敏
+
+#### 路由转发
+
+Gateway允许我们定义路由规则，将进入的请求根据不同的路径转发到下游的服务。
+
+
+
+我们可以根据用户的不同请求，将用户路由到对应的服务中，比如，用户要访问订单服务，将请求转发到订单服务的集群，用户要访问商品服务，将请求路由转发到商品服务的集群。
+
+```yaml
+spring:
+	cloud: 
+		gateway:
+			default-filters:
+				- DedupeResponseHeader=Access-Control-Allow-Origin, RETAIN_UNIQUE
+			globalcors:
+				cors-configurations:
+                   '[/**]':
+                    allowedHeaders: '*'
+                    allowedMethods: '*'
+                    allowedOrigins: '*'
+            routes: 
+            	- id: nfturbo-auth
+            	  uri: lb: //nfturbo-auth
+            	  predicates: 
+            	  	- Path=/auth/**,/token/**
+                - id: nfturbo-business
+                  uri: lb://nfturbo-business
+                  predicates:
+                    - Path=/trade/**,/order/**,/user/**,/collection/**,/wxPay/**,/box/**
+```
+
+> 上述的配置意思就是：如果匹配到`/auth/**`或者`/token/**`，会将服务转发到nfturbo-auth模块。并且使用lb: // 会使用负载均衡来访问auth服务。
+>
+> predicate就是路由匹配规则。
+
+#### 统一鉴权
+
+在Gateway服务中，我们集成了OAuth2，进行统一的登录和鉴权。以Sa-Token为例：
+
+```java
+@Configuration
+@Slf4j
+public class SaTokenConfigure {
+    @Bean
+    public SaReactorFilter getSaReactorFilter() {
+        return new SaReactorFilter()
+                // 拦截地址
+                .addInclude("/**")
+                // 开放地址
+                .addExclude("/favicon.ico")
+                // 鉴权方法：每次访问进入
+                .setAuth(obj -> {
+                    // 登录校验 -- 拦截所有路由，并排除/auth/login 用于开放登录
+                    SaRouter.match("/**").notMatch("/auth/**", "/collection/collectionList", "/collection/collectionInfo", "/wxPay/**").check(r -> StpUtil.checkLogin());
+
+                    // 权限认证 -- 不同模块, 校验不同权限
+                    SaRouter.match("/admin/**", r -> StpUtil.checkRole(UserRole.ADMIN.name()));
+                    SaRouter.match("/trade/**", r -> StpUtil.checkPermission(UserPermission.AUTH.name()));
+
+                    SaRouter.match("/user/**", r -> StpUtil.checkPermissionOr(UserPermission.BASIC.name(), UserPermission.FROZEN.name()));
+                    SaRouter.match("/order/**", r -> StpUtil.checkPermissionOr(UserPermission.BASIC.name(),UserPermission.FROZEN.name()));
+                })
+                // 异常处理方法：每次setAuth函数出现异常时进入
+                .setError(this::getSaResult);
+    }
+}
+
+```
+
+> 基于Cloud + SaToken实现统一鉴权。
+>
+> 我们的系统的角色和权限只有以下几种：
+>
+> 角色：
+>
+> - ADMIN：管理员
+> - CUSTOMER：普通用户
+>
+> 权限：
+>
+> - BASIC：基本权限
+> - AUTH：已实名认证权限
+> - FROZEN：被冻结用户权限
+> - NONE：无权限
+>
+> 我们在其中加上了对应获取角色和权限的类：`StpInterfaceImpl`
+>
+> ```java
+> @Component
+> public class StpInterfaceImpl implements StpInterface {
+>     @Override
+>     public List<String> getPermissionList(Object loginId, String loginType) {
+>         UserInfo userInfo = (UserInfo) StpUtil.getSessionByLoginId(loginId).get((String) loginId);
+> 
+>         if (userInfo.getUserRole() == UserRole.ADMIN || userInfo.getState().equals(UserStateEnum.ACTIVE.name()) || userInfo.getState().equals(UserStateEnum.AUTH.name()) ) {
+>             return List.of(UserPermission.BASIC.name(), UserPermission.AUTH.name());
+>         }
+> 
+>         if (userInfo.getState().equals(UserStateEnum.INIT.name())) {
+>             return List.of(UserPermission.BASIC.name());
+>         }
+> 
+>         if (userInfo.getState().equals(UserStateEnum.FROZEN.name())) {
+>             return List.of(UserPermission.FROZEN.name());
+>         }
+> 
+>         return List.of(UserPermission.NONE.name());
+>     }
+> 
+>     @Override
+>     public List<String> getRoleList(Object loginId, String loginType) {
+>         UserInfo userInfo = (UserInfo) StpUtil.getSessionByLoginId(loginId).get((String) loginId);
+>         if (userInfo.getUserRole() == UserRole.ADMIN) {
+>             return List.of(UserRole.ADMIN.name());
+>         }
+>         return List.of(UserRole.CUSTOMER.name());
+>     }
+> }
+> ```
+>
+> 我们定义了一个Sa-Token的全局配置：`SaTokenConfigure`
+>
+> ```java
+> @Configuration
+> @Slf4j
+> public class SaTokenConfigure {
+>     @Bean
+>     public SaReactorFilter getSaReactorFilter() {
+>         return new SaReactorFilter()
+>                 // 拦截地址
+>                 .addInclude("/**")
+>                 // 开放地址
+>                 .addExclude("/favicon.ico")
+>                 // 鉴权方法：每次访问进入
+>                 .setAuth(obj -> {
+>                     // 登录校验 -- 拦截所有路由，并排除/auth/login 用于开放登录
+>                     SaRouter.match("/**").notMatch("/auth/**", "/collection/collectionList", "/collection/collectionInfo", "/wxPay/**").check(r -> StpUtil.checkLogin());
+> 
+>                     // 权限认证 -- 不同模块, 校验不同权限
+>                     SaRouter.match("/admin/**", r -> StpUtil.checkRole(UserRole.ADMIN.name()));
+>                     SaRouter.match("/trade/**", r -> StpUtil.checkPermission(UserPermission.AUTH.name()));
+> 
+>                     SaRouter.match("/user/**", r -> StpUtil.checkPermissionOr(UserPermission.BASIC.name(), UserPermission.FROZEN.name()));
+>                     SaRouter.match("/order/**", r -> StpUtil.checkPermissionOr(UserPermission.BASIC.name(),UserPermission.FROZEN.name()));
+>                 })
+>                 // 异常处理方法：每次setAuth函数出现异常时进入
+>                 .setError(this::getSaResult);
+>     }
+> 
+>     private SaResult getSaResult(Throwable throwable) {
+>         switch (throwable) {
+>             case NotLoginException notLoginException:
+>                 log.error("请先登录");
+>                 return SaResult.error("请先登录");
+>             case NotRoleException notRoleException:
+>                 if (UserRole.ADMIN.name().equals(notRoleException.getRole())) {
+>                     log.error("请勿越权使用！");
+>                     return SaResult.error("请勿越权使用！");
+>                 }
+>                 log.error("您无权限进行此操作！");
+>                 return SaResult.error("您无权限进行此操作！");
+>             case NotPermissionException notPermissionException:
+>                 if (UserPermission.AUTH.name().equals(notPermissionException.getPermission())) {
+>                     log.error("请先完成实名认证！");
+>                     return SaResult.error("请先完成实名认证！");
+>                 }
+>                 log.error("您无权限进行此操作！");
+>                 return SaResult.error("您无权限进行此操作！");
+>             default:
+>                 return SaResult.error(throwable.getMessage());
+>         }
+>     }
+> }
+> ```
+>
+> 主要的权限认证功能：
+> ![image-20250826111651838](NFTurbo/image-20250826111651838.png)
+>
+> 根据用户访问到的不同路径，判断不同的权限即可。
+>
+> 为了得到一个友好的错误提示，不用全局拦截的原因是gateway是一个webFlux应用。不是传统的MVC的web应用。
+>
+> 触发错误之后，反参如下：
+>
+> ```json
+> {
+>     "code": 500,
+>     "msg": "请先完成实名认证！",
+>     "data":null
+> }
+> ```
+
+#### 限流熔断
+
+结合sentinal
+
