@@ -741,3 +741,11 @@ public class SaTokenConfigure {
 
 结合sentinal
 
+## 功能模块
+
+### 用户模块设计
+
+![image-20250826145838306](NFTurbo/image-20250826145838306.png)
+
+
+
