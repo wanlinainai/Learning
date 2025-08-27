@@ -919,3 +919,53 @@ public class UserCacheDelayDeleteService {
 ```
 
 拿到Cache和User，之后延迟两秒执行Runable接口移除缓存。
+
+### 短信服务
+
+在用户模块中有一个接口用于发送短信，我们的短信是一个单独的短信服务。SMS服务，同时还有一个Notice服务，用于作为中间层，用户服务调用Notice服务，通知服务调用SMS服务。
+
+1. 为了防止出现盗刷接口的情况，第一步就是要做接口限制，使用redission作为限流的条件，
+
+![image-20250827150622402](NFTurbo/image-20250827150622402.png)
+
+使用手机号作为Key值，一分钟只能发送一条短信。
+
+2. 生成验证码，将验证码存入到缓存中，设置5min的过期时间。
+3. 将验证码保存到数据库中。
+4. 使用虚拟线程发送SMS短信，提前向用户响应，体验友好，因为其中的操作都是可以拆理出来的，不需要和用户操作反应串行。
+
+```java
+    @Facade
+    @Override
+    public NoticeResponse generateAndSendSmsCaptcha(String telephone) {
+        Boolean access = slidingWindowRateLimiter.tryAcquire(telephone, 1, 60);
+
+        if (!access) {
+            throw new SystemException(SEND_NOTICE_DUPLICATED);
+        }
+
+        // 生成验证码
+        String captcha = RandomUtil.randomNumbers(4);
+
+        // 验证码存入Redis
+        redisTemplate.opsForValue().set(CAPTCHA_KEY_PREFIX + telephone, captcha, 5, TimeUnit.MINUTES);
+
+        Notice notice = noticeService.saveCaptcha(telephone, captcha);
+
+        Thread.ofVirtual().start(() -> {
+            SmsSendResponse result = smsService.sendMsg(notice.getTargetAddress(), notice.getNoticeContent());
+            if (result.getSuccess()) {
+                notice.setState(NoticeState.SUCCESS);
+                notice.setSendSuccessTime(new Date());
+                noticeService.updateById(notice);
+            } else {
+                notice.setState(NoticeState.FAILED);
+                notice.addExtendInfo("executeResult", JSON.toJSONString(result));
+                noticeService.updateById(notice);
+            }
+        });
+
+        return new NoticeResponse.Builder().setSuccess(true).build();
+    }
+```
+
