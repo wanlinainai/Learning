@@ -747,5 +747,175 @@ public class SaTokenConfigure {
 
 ![image-20250826145838306](NFTurbo/image-20250826145838306.png)
 
+#### 状态机
 
+![image-20250827095530613](NFTurbo/image-20250827095530613.png)
 
+### 用户信息的缓存
+
+用户信息是一个非常基本的信息，许多地方用到了用户信息，同时用户信息的变更是不太频繁的，为了提升性能，对用户信息做缓存。我们用的是JetCache。
+
+#### 缓存的写入 - 查询时
+
+通过Id去查询用户信息时，我们会去将用户信息保存到缓存中，Key是`${keyPrefix}:user:cache:id:EL表达式解析出来的userId`。
+
+```java
+    @Cached(name = ":user:cache:id:", cacheType = CacheType.BOTH, key = "#userId", cacheNullValue = true)
+    public User findById(Long userId) {
+        return userMapper.findById(userId);
+    }
+```
+
+JetCache的配置文件在：cache模块中：
+
+```yaml
+jetcache:
+  statIntervalMinutes: 1
+  areaInCacheName: false
+  local:
+    default:
+      type: caffeine
+      keyConvertor: fastjson2
+  remote:
+    default:
+      type: redisson
+      keyConvertor: fastjson2
+      broadcastChannel: ${spring.application.name}
+      keyPrefix: ${spring.application.name}
+      valueEncoder: java
+      valueDecoder: java
+      defaultExpireInMillis: 5000
+```
+
+> 上述的@Cached注解就是JetCache提供的，通过AOP的方式拦截这个方法，方法执行完成之后，将结果保存在缓存中。
+>
+> - name：缓存Key的前缀
+> - cacheType：缓存类型，REMOTE（分布式缓存）、LOCAL（本地缓存）、BOTH（开启二级缓存）
+> - key：表示缓存的Key值，通过EL表达式解析出userId的值。
+> - cacheNullValue：表示是否缓存空值，避免缓存穿透
+
+#### 缓存的写入 - 注册时
+
+用户注册的时候也需要加上写缓存操作，缓存的还是userId。
+
+缓存的初始化：
+
+```java
+    @PostConstruct
+    public void init() {
+        QuickConfig idQc = QuickConfig.newBuilder(":user:cache:id:")
+                .cacheType(CacheType.BOTH)
+                .expire(Duration.ofHours(2))
+                .syncLocal(true)
+                .build();
+        idUserCache = cacheManager.getOrCreateCache(idQc);
+    }
+```
+
+具体的调用，在注册方法中如下：
+
+```java
+    private void updateUserCache(String userId, User user) {
+        idUserCache.put(userId, user);
+    }
+```
+
+没有使用注解式的，使用的是官方写的案例。
+
+#### 缓存更新
+
+设置的缓存自动更新策略。
+
+```java
+@CacheRefresh(refresh = 60, timeUnit = TimeUnit.MINUTES)
+```
+
+表示60分钟进行缓存刷新，会自动起一个后台线程执行方法，将结果保存到缓存中。
+
+#### 缓存失效
+
+我们做的缓存的失效功能也是很简单，直接使用@CacheInvalidate注解即可。
+
+```java
+@CacheInvalidate(name = ":user:cache:id:", key = "#userActiveRequest.userId")
+```
+
+> 缓存和数据库一致性方案：
+>
+> 1. 先更新数据库，再删除缓存（YES）
+> 2. 延时双删（YES）
+> 3. binlog监听实现缓存更新/删除（大项目用的比较多）
+
+针对1：
+
+我们是在用户激活的时候进行处理的，也就是在判断更新用户状态的数据库成功之后进行删除缓存的操作。之后如果用户在查询的话还是会缓存的。同时为了保证在删除缓存失败的时候导致数据不一致，我们还有之前说的刷新缓存的策略。60MIN会自动刷新缓存，做60MIN 的原因是每一个用户对自己个人信息的变更周期其实没有那么多，并发量不高。所以暂时的脏数据是可以理解的。
+
+针对2：
+
+为了减少先更新数据库再删除缓存的这个方法出现的一致性问题，其实将删除移到更新数据库之前即可。但是这个问题出现的原因就是万一另一个线程在数据库读取到了旧的值，又会将缓存重新刷新到缓存中，导致数据不一致。解决的方法就是删除第一遍缓存的时候，之后在更新数据库之后再删除一遍缓存。
+
+总体的步骤是：
+
+1. **第一次删除**：更新数据库前，删除缓存。
+2. **更新数据库**：执行数据库的写操作。
+3. **延迟等待**：等待一段时间（主从同步延迟时间 + 少量缓冲时间）
+4. **第二次删除**：再次删除缓存。
+
+第一次删除缓存是为了清除缓存的旧值，强制后续请求直接请求数据库；第二次删除是为了清除在数据库更新期间被其他线程请求写入的旧缓存值。
+
+**我们在冻结、解冻接口中，对于冻结、解冻部分，并发量虽然不高，但是接受不一致数据的程度比较低，我们希望可以快速更新缓存，避免不一致，所以引入了延迟双删。**
+
+冻结的接口：
+
+```java
+    @Transactional(rollbackFor = Exception.class)
+    public UserOperatorResponse freeze(Long userId) {
+        UserOperatorResponse userOperatorResponse = new UserOperatorResponse();
+        User user = userMapper.findById(userId);
+        Assert.notNull(user, () -> new UserException(USER_NOT_EXIST));
+        Assert.isTrue(user.getState() == UserStateEnum.ACTIVE, () -> new UserException(USER_STATUS_IS_NOT_ACTIVE));
+
+        //第一次删除缓存
+        idUserCache.remove(user.getId().toString());
+
+        if (user.getState() == UserStateEnum.FROZEN) {
+            userOperatorResponse.setSuccess(true);
+            return userOperatorResponse;
+        }
+        user.setState(UserStateEnum.FROZEN);
+        boolean updateResult = updateById(user);
+        Assert.isTrue(updateResult, () -> new BizException(RepoErrorCode.UPDATE_FAILED));
+        //加入流水
+        long result = userOperateStreamService.insertStream(user, UserOperateTypeEnum.FREEZE);
+        Assert.notNull(result, () -> new BizException(RepoErrorCode.UPDATE_FAILED));
+
+        //第二次删除缓存
+        userCacheDelayDeleteService.delayedCacheDelete(idUserCache, user);
+
+        userOperatorResponse.setSuccess(true);
+        return userOperatorResponse;
+    }
+```
+
+其中的`userCacheDelayDeleteService.delayedCacheDelete(idUserCache, user);`代码如下：
+
+```java
+@Service
+@Slf4j
+public class UserCacheDelayDeleteService {
+
+    private static ThreadFactory userCacheDelayProcessFactory = new ThreadFactoryBuilder()
+            .setNameFormat("user-cache-delay-delete-pool-%d").build();
+
+    private ScheduledExecutorService scheduler = new ScheduledThreadPoolExecutor(10, userCacheDelayProcessFactory);
+
+    public void delayedCacheDelete(Cache idUserCache, User user) {
+        scheduler.schedule(() -> {
+            boolean idDeleteResult = idUserCache.remove(user.getId().toString());
+            log.info("idUserCache removed, key = {} , result  = {}", user.getId(), idDeleteResult);
+        }, 2, TimeUnit.SECONDS);
+    }
+}
+```
+
+拿到Cache和User，之后延迟两秒执行Runable接口移除缓存。
