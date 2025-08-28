@@ -920,6 +920,59 @@ public class UserCacheDelayDeleteService {
 
 拿到Cache和User，之后延迟两秒执行Runable接口移除缓存。
 
+### 用户模块功能
+
+#### 获取用户信息
+
+
+
+#### 修改昵称
+
+
+
+
+
+> 布隆过滤器的概念以及使用：
+>
+> - 概念：简单来说，布隆过滤器就是一个快速检索数据是否存在的数据结构。原理就是利用多个哈希函数，讲一个元素映射成多个位，之后将这些位置设置成1，当查询一个元素的时候，如果这些位置被设置成1，认为元素可能存在于集合中。只是可能不是一定。原因其实还是因为Hash函数的冲突问题。
+>   1. 初始化布隆过滤器：指定集合的大小和误判率，BloomFilter内部包含一个bit数组和多个哈希函数，每一个哈希函数都会生成一个索引值。
+>   2. 添加元素到布隆过滤器：首先需要将该元素通过多个Hash函数生成多个索引值，将这些索引值的位设置成1。如果这些索引值已经被设置成了1，无需再次设置。
+>   3. 查询元素是否存在于BloomFilter中：通过多哈Hash函数生成多个索引值，并判断这些索引值对应的位是否都被设置成了1，如果都是的话，判断存在，否则不存在。
+> - 应用
+>
+> 1. 在类初始化之后进行布隆过滤器的初始化：
+>
+> ```java
+> public void afterPropertiesSet() throws Exception {
+>   this.nickNameBloomFilter = redissonClient.getBloomFilter("nickName");
+>   if (nickNameBloomFilter != null && !nickNameBloomFilter.isExists()) {
+>     this.nickNameBloomFilter = tryInit(100000L, 0.01); // 设置数据量大小和误判率
+>   }
+> }
+> ```
+>
+> 2. 添加到BloomFilter：
+>
+> ```java
+> private boolean addNickName(String nickName) {
+>   return this.nickNameBloomFilter != null && this.nickNameBloomFilter.add(nickName);
+> }
+> ```
+>
+> 3. 查询布隆过滤器中是否存在元素：
+>
+> ```java
+> public boolean nickNameExist(String nickName) {
+>   // 如果BloomFilter中存在。需要进行数据库的二次判断
+>   if(this.nickNameBloomFilter != null && this.nickNameBloomFilter.contains(nickName)) {
+>     return userMapper.findByNickName() != null;
+>   }
+>   return false;
+> }
+> ```
+>
+> 
+
 ### 短信服务
 
 在用户模块中有一个接口用于发送短信，我们的短信是一个单独的短信服务。SMS服务，同时还有一个Notice服务，用于作为中间层，用户服务调用Notice服务，通知服务调用SMS服务。
