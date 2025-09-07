@@ -1547,3 +1547,50 @@ private void updateInviteRank(String inviterId) {
 `score = 分数 + 1 - 时间戳/1e13`
 
 代码还是如上：`updateInviteRank`
+
+### 藏品模块
+
+主要表结构：`collection`、`held_collection`、`collection_stream`、`collection_snapshot`、`collection_inventory_stream`。
+
+- `collection`：藏品表，保存的是一个商品的主要信息，库存、价格等。
+- `held_collection`：持有藏品表，当一个藏品被购买之后，会转换成持有藏品，包含了持有者信息、藏品序列号等信息。可以进行售卖、合成、转赠等操作。
+- `collection_snapshot`：藏品快照表，每一个藏品的核心信息的修改，如价格修改，图片修改等，会生成一个新的版本，并记录一个快照，用于订单记录快照版本号，方便回溯当时下单时的藏品等信息。
+- `collection_inventory_stream`：藏品库存流水表，记录每一次藏品的库存有关的流水，主要用于幂等控制以及数据对账。
+
+
+
+#### ES 和DB快速切换
+
+主要还是使用`@ConditionalOnProperty()`注解实现。
+
+我们的项目中使用到了这个注解来实现
+
+```java
+@ConditionalOnProperty(name = "spring.elasticsearch.enable", havingValue = "true")
+```
+
+这个注解会从配置文件中读取相应的配置，如果是true会实例化类。但是如果我们在本地执行的话可以添加VM虚拟机参数：
+
+```shell
+-Dspring.elasticsearch.enable=true
+```
+
+会优先执行虚拟机配置的参数，同时我们的项目中使用到了nacos，可以用到nacos中的配置中心功能，动态设置具体的 配置。
+
+执行顺序的话：
+
+1. 虚拟机参数
+2. nacos配置参数
+3. 本地yml文件配置
+
+如果想要项目中的配置文件优先级超过nacos，需要在设置nacos的配置地方加上：
+
+```yaml
+spring:
+  cloud:
+    nacos:
+      config:
+        override-none: true
+```
+
+同时如果我们使用nacos的好处还有一点：如果ES连接出现失败，比如ES挂掉了，或者是其他原因导致的ES不可用，可以在nacos中设置可用为false，如此一来实现了快速的失败响应，之后ES服务恢复之后重新设置成true即可。
