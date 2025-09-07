@@ -1167,6 +1167,231 @@ public class UserCacheDelayDeleteService {
 >
 > 调用的JDBC的`parameterize(Statement statement)`方法。调用`DefaultParameterHandler.setParameters()`方法，比如上述AesEncryptTypeHandler我们设置的**ps.setString(i, encrypt(parameter))**，就可以将输入加密，输出解密。实现数据库层面加密同时代码层面无需显示加密但可以进行数据加密的操作。
 
+#### 用户敏感信息脱敏（日志脱敏）
+
+引用了github的一个sensitive的包，github链接：[sensitive-github](https://github.com/houbb/sensitive)
+
+```xml
+<dependency>
+  <groupId>com.github.houbb</groupId>
+  <artifactId>sensitive-logback</artifactId>
+  <version>1.7.0</version>
+</dependency>
+```
+
+引入`logback`依赖包
+
+```xml
+<dependency>
+  <groupId>ch.qos.logback</groupId>
+  <artifactId>logback-classic</artifactId>
+  <version>${logback.version}</version>
+</dependency>
+```
+
+在logback中设置用户信息脱敏：
+
+```xml
+<!-- 基于 converter -->
+    <conversionRule conversionWord="sensitive" converterClass="com.github.houbb.sensitive.logback.converter.SensitiveLogbackConverter" />
+```
+
+日志格式的配置：
+
+```xml
+<property name="FILE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%tid] %-5level [%thread] %logger{36} - %sensitive%n"/>
+```
+
+```xml
+    <appender name="APPLICATION" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}</file>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.TraceIdPatternLogbackLayout">
+                <Pattern>${FILE_LOG_PATTERN}</Pattern>
+            </layout>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxHistory>7</maxHistory>
+            <maxFileSize>50MB</maxFileSize>
+            <totalSizeCap>20GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.TraceIdPatternLogbackLayout">
+                <Pattern>${FILE_LOG_PATTERN}</Pattern>
+            </layout>
+        </encoder>
+    </appender>
+```
+
+脱敏展示的字段：
+
+```java
+@Setter
+@Getter
+@TableName("users")
+public class User extends BaseEntity {
+    /**
+     * 昵称
+     */
+    private String nickName;
+
+    /**
+     * 密码
+     */
+    private String passwordHash;
+
+    /**
+     * 状态
+     */
+    private UserStateEnum state;
+
+    /**
+     * 邀请码
+     */
+    private String inviteCode;
+
+    /**
+     * 邀请人用户ID
+     */
+    private String inviterId;
+
+    /**
+     * 手机号
+     */
+    @SensitiveStrategyPhone
+    private String telephone;
+
+    /**
+     * 最后登录时间
+     */
+    private Date lastLoginTime;
+
+    /**
+     * 头像地址
+     */
+    private String profilePhotoUrl;
+
+    /**
+     * 区块链地址
+     */
+    private String blockChainUrl;
+
+    /**
+     * 区块链平台
+     */
+    private String blockChainPlatform;
+
+    /**
+     * 实名认证
+     */
+    private Boolean certification;
+
+    /**
+     * 真实姓名
+     */
+    @TableField(typeHandler = AesEncryptTypeHandler.class)
+    private String realName;
+
+    /**
+     * 身份证hash
+     */
+    @TableField(typeHandler = AesEncryptTypeHandler.class)
+    private String idCardNo;
+
+    /**
+     * 用户角色
+     */
+    private UserRole userRole;
+}
+```
+
+![image-20250907210436472](images/NFTurbo/image-20250907210436472.png)
+
+上述的图片展示的是这个注解的不同使用注解，地址、生日、卡号、中文名、Email等。
+
+使用实例：
+
+```java
+    @GetMapping("/getUserInfo")
+    public Result<UserInfo> getUserInfo() {
+        String userId = (String) StpUtil.getLoginId();
+        User user = userService.findById(Long.valueOf(userId));
+
+        if (user == null) {
+            throw new UserException(USER_NOT_EXIST);
+        }
+        return Result.success(UserConvertor.INSTANCE.mapToVo(user));
+    }
+```
+
+响应到前端时进行拦截：
+
+```java
+@ControllerAdvice
+public class SensitiveResponseBodyAdvice implements ResponseBodyAdvice<Object> {
+
+    @Override
+    public boolean supports(MethodParameter returnType, Class<? extends HttpMessageConverter<?>> converterType) {
+        // 只对特定类型的返回值执行处理逻辑，这里可以根据需要调整判断条件
+        return Result.class.isAssignableFrom(returnType.getParameterType());
+    }
+
+    @Override
+    public Object beforeBodyWrite(Object body, MethodParameter returnType, MediaType selectedContentType, Class<? extends HttpMessageConverter<?>> selectedConverterType, ServerHttpRequest request, ServerHttpResponse response) {
+        // 如果返回的对象是UserInfo/InviteRankInfo，进行脱敏处理
+        if (body != null && body instanceof Result) {
+
+            if (((Result<?>) body).getData() == null) {
+                return body;
+            }
+
+            if (((Result<?>) body).getData() instanceof Collection<?>) {
+                ((Result<Collection>) body).setData(SensitiveUtil.desCopyCollection((Collection) ((Result<?>) body).getData()));
+                return body;
+            }
+
+            switch (((Result<?>) body).getData()) {
+                case UserInfo userInfo:
+                    ((Result<UserInfo>) body).setData(SensitiveUtil.desCopy(userInfo));
+                    return body;
+                case InviteRankInfo inviteRankInfo:
+                    ((Result<InviteRankInfo>) body).setData(SensitiveUtil.desCopy(inviteRankInfo));
+                    return body;
+                default:
+                    return body;
+            }
+        }
+        return body;
+    }
+}
+```
+
+> 首先判断返回的值是否是Result，是Result的话判断body是否为空，空的话就跳过；如果返回的时候一个Collection，那么对这个Collection的每一个元素进行脱敏处理，如果返回的是一个对象（目前是只会对用户信息进行脱敏，涉及到的类有UserInfo、InviteRankInfo）分别处理。之后返回。
+
+> 拓展：个性化配置
+>
+> 在resources通过chars-scan-config.properties文件配置指定：
+>
+> ```properties
+> # log4j默认配置如下：
+> chars.scan.prefix=:：,，'"‘“=| +()（）
+> chars.scan.scanList=1,2,3,4,9
+> chars.scan.replaceList=1,2,3,4,9
+> chars.scan.defaultReplace=12
+> chars.scan.replaceHash=md5
+> chars.scan.whiteList=""
+> ```
+>
+> SensitivePatternLayout 策略的属性说明。
+>
+> ![image-20250907211723642](images/NFTurbo/image-20250907211723642.png)
+>
+> ![image-20250907211740795](images/NFTurbo/image-20250907211740795.png)
+
 ### 短信服务
 
 在用户模块中有一个接口用于发送短信，我们的短信是一个单独的短信服务。SMS服务，同时还有一个Notice服务，用于作为中间层，用户服务调用Notice服务，通知服务调用SMS服务。
@@ -1216,3 +1441,109 @@ public class UserCacheDelayDeleteService {
     }
 ```
 
+### 排行榜
+
+用户邀请其他用户会有一定的积分，提供了一个排行榜的功能，可以基于这个积分进行排名。
+
+排名的功能很简单，基于Redis的Zset即可。将积分做成score，用户id作为member，放到zset中，zset会按照score进行排序的。
+
+以下是通过邀请注册用户的部分代码：
+
+```java
+@DistributeLock(keyExpression = "#telephone", scene = "USER_REGISTER")
+public UserOperatorResponse register(String telephone, String inviteCode) {
+	//用户名生成
+    String inviterId = null;
+    if (StringUtils.isNotBlank(inviteCode)) {
+        User inviter = userMapper.findByInviteCode(inviteCode);
+        if (inviter != null) {
+            inviterId = inviter.getId().toString();
+        }
+    }
+    //用户注册
+    //更新排名
+    updateInviteRank(inviterId);
+	//其他逻辑
+}
+
+// ZSet的redisson集合
+private RScoredSortedSet<String> inviteRank;
+
+private void updateInviteRank(String inviterId) {
+  if (inviterId == null) {
+    return ;
+  }
+  RLock rLock = redissionClient.getLock(inviterId);
+  rLock.lock();
+  try {
+    Double score = inviteRank.getScore(inviterId);
+    if (score == null) {
+      score = 0.0;
+    }
+     Long currentTimeStamp = System.currentTimeMillis();
+    double timePartScore = 1 - (double) currentTimeStamp / 10000000000000L;
+    
+    inviteRank.add(score.intValue() + 100.0 + timePartScore, inviterId);
+  } finally {
+    rLock.unLock();
+  }
+}
+```
+
+此处用到了Redisson的RLock进行加锁处理，用到的是getLock()加悲观锁。加锁失败会一直尝试，主要就是为了避免多个用户同时被邀请的时更新分数导致分数累加错误。
+
+用到的列表是：RScoredSortedSet，提供了一些开箱即用的方法：
+
+- getScore：获取指定成员的分数
+- add：向有序集合中添加一个成员，指定该成员的分数
+- rank：获取指定成员在有序集合中的排名（从小到大排序，排名从0开始）
+- revRank：获取指定成员在有序集合中的排名（从大到小排序，排名从0开始）
+- entryRange：获取分数在指定范围内的成员以及分数的集合
+
+我们的获取前N个用户排名信息接口方法：
+
+```java
+    @GetMapping("/getTopN")
+    public MultiResult<InviteRankInfo> getTopN(@Max(100) Integer topN) {
+        if (topN == null) {
+            topN = 100;
+        }
+
+        List<InviteRankInfo> inviteRankInfos = userService.getTopN(topN);
+        return MultiResult.successMulti(inviteRankInfos, topN, 1, 10);
+    }
+```
+
+```java
+    public List<InviteRankInfo> getTopN(Integer topN) {
+        Collection<ScoredEntry<String>> rankInfos = inviteRank.entryRangeReversed(0, topN - 1);
+
+        List<InviteRankInfo> inviteRankInfos = new ArrayList<>();
+
+        if (rankInfos != null) {
+            for (ScoredEntry<String> rankInfo : rankInfos) {
+                InviteRankInfo inviteRankInfo = new InviteRankInfo();
+                String userId = rankInfo.getValue();
+                if (StringUtils.isNotBlank(userId)) {
+                    User user = findById(Long.valueOf(userId));
+                    if (user != null) {
+                        inviteRankInfo.setNickName(user.getNickName());
+                        inviteRankInfo.setInviteCode(user.getInviteCode());
+                        inviteRankInfo.setInviteScore(rankInfo.getScore().intValue());
+                        inviteRankInfos.add(inviteRankInfo);
+                    }
+                }
+            }
+        }
+
+        return inviteRankInfos;
+    }
+```
+
+除此之外，还做了多维度排行榜实现（如果分数相同，按照先后时间进行排列，更先注册的分数更高）
+
+我们可以将score设置成浮点数，比如：`200.17923479837`这种的。实现方式如下：`score + 分数 + 时间戳/1e13`。如果是这种的话，注册时间在后边的分数会更高，怎么将注册时间更早的排名靠前呢？
+
+`score = 分数 + 1 - 时间戳/1e13`
+
+代码还是如上：`updateInviteRank`
