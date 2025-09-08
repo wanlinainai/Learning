@@ -1594,3 +1594,143 @@ spring:
 ```
 
 同时如果我们使用nacos的好处还有一点：如果ES连接出现失败，比如ES挂掉了，或者是其他原因导致的ES不可用，可以在nacos中设置可用为false，如此一来实现了快速的失败响应，之后ES服务恢复之后重新设置成true即可。
+
+#### 藏品搜索两级缓存
+
+我们的藏品变化是不明显的，库存是明显的，所以我们对藏品加缓存提升检索速率。
+
+但是我们同时对库存也做了缓存处理。原因是我们的库存是现在缓存中做的预扣减，所以变化Redis都是可以感知到的，可以走缓存查询。
+
+缓存实现过程中，我们使用的是Redis + Caffine做两级缓存，使用Ali的JetCache做二级缓存的管理。
+
+第一步就是根据藏品id查询藏品信息：
+
+```java
+Collection collection = collectionService.queryById(collectionId);
+```
+
+```java
+    @Override
+    @Cached(name = ":collection:cache:id:", expire = 60, localExpire = 10, timeUnit = TimeUnit.MINUTES, cacheType = CacheType.BOTH, key = "#collectionId", cacheNullValue = true)
+    @CacheRefresh(refresh = 50, timeUnit = TimeUnit.MINUTES)
+    public Collection queryById(Long collectionId) {
+        return getById(collectionId);
+    }
+```
+
+将查询到的缓存加入到本地缓存和Redis缓存中，方便下一次查询的高效。
+
+第二步是查询库存，先去本地缓存中查询售完的藏品，如果藏品已经售完，直接返回库存量为0。如果本地缓存中未售完，Redis中查询具体的库存，（去Redis中查询的原因是在用户下单之后我们优先在Redis中扣减库存）。
+
+```java
+    @Override
+    public SingleResponse<Integer> queryInventory(InventoryRequest inventoryRequest) {
+
+        GoodsType goodsType = inventoryRequest.getGoodsType();
+
+        // 查询本地缓存中售完的藏品
+        if (soldOutGoodsLocalCache.getIfPresent(goodsType + SEPARATOR + inventoryRequest.getGoodsId()) != null) {
+            return SingleResponse.of(0);
+        }
+
+        // 没有售完，去Redis中查询具体的库存
+        Integer inventory = switch (goodsType) {
+            case COLLECTION -> collectionInventoryRedisService.getInventory(inventoryRequest);
+            case BLIND_BOX -> blindBoxInventoryRedisService.getInventory(inventoryRequest);
+            default -> throw new UnsupportedOperationException(ERROR_CODE_UNSUPPORTED_GOODS_TYPE);
+        };
+
+        return SingleResponse.of(inventory);
+    }
+```
+
+```java
+    @Override
+    public Integer getInventory(InventoryRequest request) {
+        Integer stock = (Integer) redissonClient.getBucket(getCacheKey(request), IntegerCodec.INSTANCE).get();
+        return stock;
+    }
+```
+
+第三步设置藏品状态。（**CollectionVO.java**）
+
+```java
+    public static GoodsState getState(CollectionStateEnum state, Date saleTime, Long saleableInventory) {
+        if (state.equals(CollectionStateEnum.INIT) || state.equals(CollectionStateEnum.REMOVED)) {
+            return GoodsState.NOT_FOR_SALE;
+        }
+
+        Instant now = Instant.now();
+
+        // 如果当前时间 > 藏品销售时间，判断库存，如果库存大于0 ，返回 SELLING；否则返回 SOLD_OUT
+        if (now.compareTo(saleTime.toInstant()) >= 0) {
+            if (saleableInventory > 0) {
+                return GoodsState.SELLING;
+            } else {
+                return GoodsState.SOLD_OUT;
+            }
+        } else {
+            if (ChronoUnit.MINUTES.between(now, saleTime.toInstant()) > DEFAULT_MIN_SALE_TIME) {
+                return GoodsState.WAIT_FOR_SALE;
+            } else {
+                return GoodsState.COMING_SOON;
+            }
+        }
+    }
+
+    public void setState(CollectionStateEnum state, Date saleTime, Long saleableInventory) {
+        super.setState(getState(state, saleTime, saleableInventory));
+    }
+```
+
+之后将得到的数据返回。
+
+```java
+    @Override
+    public SingleResponse<CollectionVO> queryById(Long collectionId) {
+        Collection collection = collectionService.queryById(collectionId);
+        if (collection == null) {
+            return SingleResponse.fail(COLLECTION_NOT_EXIST.getCode(), COLLECTION_NOT_EXIST.getMessage());
+        }
+
+        InventoryRequest request = new InventoryRequest();
+        request.setGoodsId(collectionId.toString());
+        request.setGoodsType(GoodsType.COLLECTION);
+        SingleResponse<Integer> response = inventoryFacadeService.queryInventory(request);
+
+        //没查到的情况下，默认用数据库里面的库存做兜底
+        Integer inventory = collection.getSaleableInventory().intValue();
+        if (response.getSuccess()) {
+            inventory = response.getData();
+        }
+
+        CollectionVO collectionVO = CollectionConvertor.INSTANCE.mapToVo(collection);
+        collectionVO.setInventory(inventory.longValue());
+        collectionVO.setState(collection.getState(), collection.getSaleTime(), inventory.longValue());
+
+        return SingleResponse.of(collectionVO);
+    }
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
