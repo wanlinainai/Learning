@@ -1712,9 +1712,177 @@ Collection collection = collectionService.queryById(collectionId);
     }
 ```
 
+#### 库存相关（秒杀）
 
+做库存扣减的时候，一般有两种方式：
 
+1. 下单扣减
+2. 支付扣减
 
+下单扣减的好处：实时性比较强；简单直接；可以避免超卖（可以直接在Redis中做库存扣减失败，单线程）。
+
+支付扣减的好处：避免少卖；避免了取消订单的问题；并发量低。
+
+但是后者存在超卖问题。为了避免超卖问题，没有选择在支付扣减，因为虚拟商品本身恶意占用库存的情况比较少。
+
+##### 模型设计
+
+在库存的模型设计上，我们通过了三个字段表示库存相关信息：
+
+```java
+/**
+ * '藏品数量'
+ */
+private Long quantity;
+
+/**
+ * '可售库存'
+ */
+private Long saleableInventory;
+
+/**
+ * '已占库存'
+ * @deprecated 这个字段不再使用，详见 CollecitonSerivce.confirmSale
+*/
+@Deprecated
+private Long occupiedInventory;
+```
+
+> 藏品数量：藏品的总销售数量，这个数据从创建之后就不会再变化了，表示了这个藏品最多可以被卖多少份
+>
+> 可售库存：表示当前可以被用户下单购买的剩余库存数量，这个字段会随着用户每一次下单开始递减
+>
+> 已占用库存：随着用户下单之后并且完成支付的库存总量，随着用户每一次下单递增
+
+##### 流程设计
+
+![image-20250910005601084](images/NFTurbo/image-20250910005601084.png)
+
+我们会在用户创建订单之后进行库存的预扣减，一开始是在Redis中进行库存的预扣减，扣减成功后通过Spring Event事件发送一个异步事件，在数据库中进行预扣减，此时可以进行的额外操作是进行削峰填谷。
+
+**Redis库存预扣减**
+
+利用的是LUA脚本进行控制原子性，总共是有四个参数：
+
+- KEYS2[1]：库存的key =====>  clc:inventory:10000
+- KEYS2[2]：流水的key =====>  clc:inventory:stream:10000
+- ARGV[1]：本次要扣减的库存数：1
+- ARGV[2]：本次扣减的唯一编号：id_1892328347893247
+
+```lua
+-- 检查操作是否已经操作过，通过的是hash表[KEYS[2]]标识	（ARGV[2]）							
+if redis.call('hexists', KEYS[2], ARGV[2]) == 1 then
+  -- 如果已经存在，说明已经扣减过了，返回错误
+                    return redis.error_reply('OPERATION_ALREADY_EXECUTED')
+                end
+-- 以下主要是校验异常，fail-fast
+                -- 获取当前的库存值        
+                local current = redis.call('get', KEYS[1])
+-- Key都没有，返回错误
+                if current == false then
+                    return redis.error_reply('KEY_NOT_FOUND')
+                end
+-- 不是数字，返回错误
+                if tonumber(current) == nil then
+                    return redis.error_reply('current value is not a number')
+                end
+-- 库存是0，返回错误
+                if tonumber(current) == 0 then
+                    return redis.error_reply('INVENTORY_IS_ZERO')
+                end
+-- 库存值小于要扣减的库存数，也就是不够了，返回错误
+                if tonumber(current) < tonumber(ARGV[1]) then
+                    return redis.error_reply('INVENTORY_NOT_ENOUGH')
+                end
+                                
+-- 计算新的库存值，设置到Key中
+                local new = tonumber(current) - tonumber(ARGV[1])
+                redis.call('set', KEYS[1], tostring(new))
+                                
+                -- 获取Redis服务器的当前时间（秒和微秒）
+                local time = redis.call("time")
+                -- 转换为毫秒级时间戳
+                local currentTimeMillis = (time[1] * 1000) + math.floor(time[2] / 1000)
+                                
+                -- 使用哈希结构存储日志
+                redis.call('hset', KEYS[2], ARGV[2], cjson.encode({
+                    action = "decrease",
+                    from = current,
+                    to = new,
+                    change = ARGV[1],
+                    by = ARGV[2],
+                    timestamp = currentTimeMillis
+                }))
+                                
+                return new
+```
+
+> 为啥要在Redis扣减的时候记录流水？
+>
+> 我们的数据格式是：
+>
+> ```shell
+> DECREASE_1019584138876096593920003
+> 
+> value：	
+> {"change":"1","action":"decrease","from":"99","timestamp":1755757231223,"by":"DECREASE_1019584138876096593920003","to":98}
+> ```
+>
+> Key是通过订单号拼接出来的，value中记录了详细的操作，action：增加还是扣减，原库存，时间戳，订单号等。
+>
+> 有两个作用：
+>
+> 1. 幂等：
+>
+>    执行LUA脚本的时候，会先去查询是否存在对应的流水，如果存在的话说明是一个重复请求，幂等掉
+>
+> 2. 对账：
+>
+>    Redis的库存扣减之后，数据库还是需要扣减的，为了发现不一致的情况，就可以利用这个来做对照了。
+>
+> 同时，这个流水也不是一直存在的，有两种情况进行删除：
+>
+> 1. 主动删除：当某一条流水已经完成对账，删除；
+> 2. 惰性删除：商品下架之后，24小时，会根据Redis的删除策略进行删除
+
+**数据库扣减预库存**
+
+1. 流水检查，检查是否已经存在流水记录，存在的话说明已经操作了，直接返回。
+2. 查询Collection表最新的库存数据。
+3. 新增Collection库存流水数据。
+4. 修改Collection表数据
+
+其中第四步：
+
+```xml
+    <update id="sale">
+        UPDATE /*+ COMMIT_ON_SUCCESS ROLLBACK_ON_FAIL TARGET_AFFECT_ROW 1 */ collection
+        SET saleable_inventory = saleable_inventory - #{quantity}, lock_version = lock_version + 1,gmt_modified = now()
+        WHERE id = #{id} and <![CDATA[saleable_inventory - frozen_inventory >= #{quantity}]]>
+    </update>
+```
+
+> **/*+ COMMIT_ON_SUCCESS ROLLBACK_ON_FAIL TARGET_AFFECT_ROW 1 */**指的是用的阿里的DMS的话使用Hint。如果使用的话会自动提交事务。
+>
+> 之后更新可售库存 - 1，乐观锁版本号 + 1。
+
+> **八股文**：数据库乐观锁、悲观锁：
+>
+> `乐观锁`：假设绝大多数事务在同一时间不会同时修改同一个数据，通常是通过版本号或时间戳来实现。我们就是使用的版本号。每一次更新的时候需要检查版本号是否发生变化，如果没有发生变化，就进行更新；发生变化的话放弃更新或重试。
+>
+> 使用场景主要是：
+>
+> - 数据竞争比较小，冲突不频繁，乐观锁能够提升系统的整体性能。
+> - 读多写少的场景
+>
+> `悲观锁`：假设在处理业务的过程中，总是发生冲突，因此在数据处理之前先加锁。通常是由数据库提供，比如：select for update。
+>
+> 使用场景主要是：
+>
+> - 数据竞争比较多，冲突比较频繁。
+> - 写操作较多
+>
+> 
 
 
 
