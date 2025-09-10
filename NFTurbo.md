@@ -1882,7 +1882,308 @@ if redis.call('hexists', KEYS[2], ARGV[2]) == 1 then
 > - 数据竞争比较多，冲突比较频繁。
 > - 写操作较多
 >
+> Redis分布式锁：
+>
+> 分布式锁本质上就是为了控制分布式系统中多个进程的执行顺序，用于保护多个系统共享资源，因为Redis有更好的性能，适合用来做分布式锁。
+>
+> 分布式锁主要使用场景：
+>
+> - 在多个应用或服务需要共同访问同一个资源使用，微服务架构中保护共享资源。
+> - 适用于处理多个节点的业务流程，保证数据的一致性和系统的稳定性。
+
+### Chain模块
+
+#### Mock服务（Mock掉链服务）
+
+我们的链服务拥有的功能：
+
+1. 用户创建链账户（createAddr）
+2. 上链操作（chain）
+3. 铸造操作（mint）
+4. 转账操作（transfer）
+5. 销毁操作（destory）
+
+整体流程：
+
+![chain_deal](images/NFTurbo/chain_deal.svg)
+
+#### 接口设计
+
+```java
+    // 创建链账户
+		@Override
+    @Facade
+    public ChainProcessResponse<ChainCreateData> createAddr(ChainProcessRequest request) {
+        return getChainService().createAddr(request);
+    }
+
+		// 上链
+    @Override
+    @Facade
+    public ChainProcessResponse<ChainOperationData> chain(ChainProcessRequest request) {
+        return getChainService().chain(request);
+    }
+
+		// 铸造
+    @Override
+    @Facade
+    public ChainProcessResponse<ChainOperationData> mint(ChainProcessRequest request) {
+        return getChainService().mint(request);
+    }
+
+		// 转账
+    @Override
+    @Facade
+    public ChainProcessResponse<ChainOperationData> transfer(ChainProcessRequest request) {
+        return getChainService().transfer(request);
+    }
+
+		// 销毁操作
+    @Override
+    @Facade
+    public ChainProcessResponse<ChainOperationData> destroy(ChainProcessRequest request) {
+        return getChainService().destroy(request);
+    }
+
+		private ChainService getChainService() {
+      if (PROFILE_DEV.equals(profile)) {
+        return chainServiceFactory.get(ChainType.MOCK);
+      }
+      
+      ChainService chainService = chainServiceFactory.get(ChainType.valueOf(chainType));
+      return chainService;
+    }
+```
+
+数据库设计：
+
+链操作表：
+
+![image-20250910230831571](images/NFTurbo/image-20250910230831571.png)
+
+> 设计亮点：
+>
+> 我们为了在开发的时候快速的进行测试，同时不用支付高额的链账户金币，采用的是Mock。通过工厂模式支持地纬链和Mock场景。
+>
+> ```java
+> @Service
+> public class ChainServiceFactory {
+>     @Autowired
+>     private final Map<String, ChainService> chainServiceMap = new ConcurrentHashMap<>();
 > 
+>     public ChainService get(ChainType chainType) {
+>         // 获取BeanName
+>         String beanName = BeanNameUtils.getBeanName(chainType.name(), "ChainService");
+>         // 组装出对应的Bean
+>         ChainService service = chainServiceMap.get(beanName);
+> 
+>         if (service != null) {
+>             return service;
+>         } else  {
+>             throw new UnsupportedOperationException("暂无此链服务");
+>         }
+>     }
+> }
+> ```
+>
+> ```java
+> public class BeanNameUtils {
+> 
+>     /**
+>      * 把一个策略名称转换成beanName
+>      * <pre>
+>      *     如 WEN_CHANG ，ChainService -> wenChangChainService
+>      * </pre>
+>      *
+>      * @param strategyName
+>      * @param serviceName
+>      * @return
+>      */
+>     public static String getBeanName(String strategyName, String serviceName) {
+>         //将服务转换成小写字母开头的驼峰形式，如A_BCD 转成 aBcd
+>         return CaseFormat.UPPER_UNDERSCORE.converterTo(CaseFormat.LOWER_CAMEL).convert(strategyName) + serviceName;
+>     }
+> }
+> ```
+>
+> 上述的beanNameUtil是可以将传入的chainType.name() + ChainService转成驼峰命名的。我们的bean 是存在两个的。
+> ![image-20250910232610918](images/NFTurbo/image-20250910232610918.png)
+>
+> MockChainServiceImpl是Mock的Bean，WenChang是地纬链的Bean。
+>
+> **有一个很好玩的用法：我们在使用`@Autowired
+>     private final Map<String, ChainService> chainServiceMap = new ConcurrentHashMap<>();`进行了HashMap的初始化，我们的两个Bean都会被自动注入，同时这个是我们可以直接利用这个beanName直接获取bean 的原因。**
+
+##### 创建链账户（createAddr）
+
+```java
+    public ChainProcessResponse<ChainCreateData> createAddr(ChainProcessRequest chainProcessRequest) {
+        chainProcessRequest.setBizId(chainProcessRequest.getUserId());
+        chainProcessRequest.setBizType(ChainOperateBizTypeEnum.USER.name());
+        WenChangCreateBody body = new WenChangCreateBody();
+        body.setName(APP_NAME_UPPER + SEPARATOR + ChainOperateBizTypeEnum.USER + SEPARATOR + chainProcessRequest.getUserId());
+        body.setOperationId(chainProcessRequest.getIdentifier());
+        String path = "/v3/account";
+
+        Long currentTime = System.currentTimeMillis();
+        String signature = WenChangChainUtils.signRequest(path, body, currentTime, wenChangChainConfiguration.apiSecret());
+        ChainProcessResponse response = doPostExecute(chainProcessRequest, ChainOperateTypeEnum.USER_CREATE, chainRequest -> chainRequest.build(body, path, signature, wenChangChainConfiguration.host(), currentTime));
+
+        if (response.getSuccess() && response.getData() != null) {
+            ChainOperateInfo chainOperateInfo = chainOperateInfoService.queryByOutBizId(chainProcessRequest.getBizId(), chainProcessRequest.getBizType(),
+                    chainProcessRequest.getIdentifier());
+            boolean updateResult = chainOperateInfoService.updateResult(chainOperateInfo.getId(),
+                    ChainOperateStateEnum.SUCCEED,
+                    null);
+        }
+        return response;
+    }
+```
+
+最重要的就是`doPostExecute`方法，在这个方法中执行的顺序内容是：
+
+1. 首先做限流，防止盗刷。
+2. 查看操作记录表，做幂等操作。
+3. 新增操作记录表，记录这个记录。
+4. 之后组装参数，按照不同的接口传入的lambda表达式内容进行不同的逻辑处理。
+5. 发送链请求，得到结果。
+6. 更新操作记录。
+7. 最后返回，最后的返回操作为什么需要单独拿一个方法来处理呢？原因是链中的创建链账户是同步操作，但是其他的类似于转账、上链、销毁都是异步操作，创建链账户直接拿到结果设置成succeed即可，但是其他异步操作需要先设置成Processing，之后定时任务轮询进行处理。
+
+```java
+   protected ChainProcessResponse doPostExecute(ChainProcessRequest chainProcessRequest, ChainOperateTypeEnum chainOperateTypeEnum,
+                                                 Consumer<ChainRequest> consumer) {
+        return handle(chainProcessRequest, request -> {
+            // 避免过渡消耗接口，限流
+            Boolean rateLimitResult = slidingWindowRateLimiter.tryAcquire(
+                    "limit#" + chainProcessRequest.getBizType() + chainProcessRequest.getIdentifier(), 1, 60);
+            if (!rateLimitResult) {
+                return new ChainProcessResponse.Builder().responseCode(ChainCodeEnum.PROCESSING.name()).data(
+                        new ChainOperationData(chainProcessRequest.getIdentifier())).buildSuccess();
+            }
+            // 查看操作记录表，如果存在操作记录，说明已经发送过请求
+            ChainOperateInfo chainOperateInfo = chainOperateInfoService.queryByOutBizId(chainProcessRequest.getBizId(), chainProcessRequest.getBizType(),
+                    chainProcessRequest.getIdentifier());
+            if (null != chainOperateInfo) {
+                // 如果是创建用户，就去结果中查询native_address，返回成功。如果是其他类型，需要将这个状态设置成PROCESSING
+                return duplicateResponse(chainProcessRequest, chainOperateTypeEnum, chainOperateInfo);
+            }
+
+            ChainRequest chainRequest = new ChainRequest();
+
+            // 新增操作记录
+            var operateInfoId = chainOperateInfoService.insertInfo(chainType(),
+                    chainProcessRequest.getBizId(), chainProcessRequest.getBizType(), chainOperateTypeEnum.name(),
+                    JSON.toJSONString(chainProcessRequest), chainProcessRequest.getIdentifier());
+            //核心逻辑执行
+            // 主要就是组装参数，因为很多接口都调用了这个接口，所以我们需要在这个地方做不同传入的lambda表达式处理方式
+            consumer.accept(chainRequest);
+
+            // 发送请求，获取得到的结果
+            ChainResponse result = doPost(chainRequest);
+            log.info("wen chang post result:{}", JSON.toJSONString(result));
+
+            // 重新更新操作记录，记录操作结果
+            boolean updateResult = chainOperateInfoService.updateResult(operateInfoId, null,
+                    result.getSuccess() ? result.getData().toString() : result.getError().toString());
+
+            if (!updateResult) {
+                throw new SystemException(RepoErrorCode.UPDATE_FAILED);
+            }
+
+            ChainProcessResponse response = buildResult(result, chainProcessRequest, chainOperateTypeEnum);
+            if (response.getSuccess() && chainOperateTypeEnum != ChainOperateTypeEnum.USER_CREATE) {
+                //延迟5秒钟之后查询状态并发送 MQ 消息通知上游
+                scheduler.schedule(() -> {
+                    try {
+                        ChainOperateInfo operateInfo = chainOperateInfoService.queryByOutBizId(chainProcessRequest.getBizId(), chainProcessRequest.getBizType(),
+                                chainProcessRequest.getIdentifier());
+                        ChainProcessResponse<ChainResultData> queryChainResult = queryChainResult(
+                                new ChainQueryRequest(chainProcessRequest.getIdentifier(), operateInfoId.toString()));
+                        if (queryChainResult.getSuccess() && queryChainResult.getData() != null) {
+                            if (StringUtils.equals(queryChainResult.getData().getState(), ChainOperateStateEnum.SUCCEED.name())) {
+                                this.sendMsg(operateInfo, queryChainResult.getData());
+
+                                chainOperateInfoService.updateResult(operateInfoId,
+                                        ChainOperateStateEnum.SUCCEED, null);
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.error("query chain result failed,", e);
+                    }
+                }, 5, TimeUnit.SECONDS);
+            }
+
+            return response;
+        });
+    }
+```
+
+```java
+    private ChainProcessResponse duplicateResponse(ChainProcessRequest chainProcessRequest, ChainOperateTypeEnum chainOperateTypeEnum, ChainOperateInfo chainOperateInfo) {
+        if (chainOperateTypeEnum == ChainOperateTypeEnum.USER_CREATE) {
+            JSONObject jsonObject = JSON.parseObject(chainOperateInfo.getResult(), JSONObject.class);
+            String blockChainAddr = (String) jsonObject.get("native_address");
+            String blockChainName = chainProcessRequest.getUserId();
+            return new ChainProcessResponse.Builder().responseCode(ChainCodeEnum.SUCCESS.name()).data(
+                    new ChainCreateData(chainProcessRequest.getIdentifier(), blockChainAddr, blockChainName,
+                            chainType())).buildSuccess();
+        } else {
+            return new ChainProcessResponse.Builder().responseCode(ChainCodeEnum.PROCESSING.name()).data(
+                    new ChainOperationData(chainProcessRequest.getIdentifier())).buildSuccess();
+        }
+    }
+```
+
+```java
+    private ChainProcessResponse buildResult(ChainResponse result, ChainProcessRequest chainProcessRequest, ChainOperateTypeEnum chainOperateTypeEnum) {
+
+        if (result.getSuccess()) {
+            if (chainOperateTypeEnum == ChainOperateTypeEnum.USER_CREATE) {
+                JSONObject dataJsonObject = result.getData();
+                String blockChainAddr = (String) dataJsonObject.get("native_address");
+                String blockChainName = chainProcessRequest.getUserId();
+                return new ChainProcessResponse.Builder().data(
+                        new ChainCreateData(chainProcessRequest.getIdentifier(), blockChainAddr, blockChainName,
+                                chainType())).buildSuccess();
+            } else {
+                return new ChainProcessResponse.Builder().responseCode(ChainCodeEnum.PROCESSING.name()).data(
+                        new ChainOperationData(chainProcessRequest.getIdentifier())).buildSuccess();
+            }
+
+        }
+        return new ChainProcessResponse.Builder().responseCode(result.getResponseCode()).responseMessage(
+                result.getResponseMessage()).buildFailed();
+    }
+```
+
+在createAddr方法中为什么拿到了这个结果之后还需要再查询一遍之后再设置成功状态呢？原因就是我们的`doPostExecute`方法是一个抽象方法，很多接口都在使用，为了解耦以及可用，只能在拿到具体结果之后再设置更新操作功能。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
