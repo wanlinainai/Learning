@@ -2159,7 +2159,159 @@ if redis.call('hexists', KEYS[2], ARGV[2]) == 1 then
 
 在createAddr方法中为什么拿到了这个结果之后还需要再查询一遍之后再设置成功状态呢？原因就是我们的`doPostExecute`方法是一个抽象方法，很多接口都在使用，为了解耦以及可用，只能在拿到具体结果之后再设置更新操作功能。
 
+##### 上链（chain）
 
+接口：`/admin/collection/createCollection`
+
+1. 获取对应的ChainService Bean 
+
+```java
+    @Override
+    @Facade
+    public ChainProcessResponse<ChainCreateData> createAddr(ChainProcessRequest request) {
+        return getChainService().createAddr(request);
+    }
+```
+
+2. 调用地纬链，组装对应的参数
+
+```java
+WenChangChainBody body = new WenChangChainBody();
+        body.setName(chainProcessRequest.getClassName());
+        body.setOperationId(chainProcessRequest.getIdentifier());
+        body.setClassId("nft" + chainProcessRequest.getClassId());
+        body.setOwner(wenChangChainConfiguration.chainAddrSuper());
+```
+
+之后还是调用发送请求的方法：
+
+```java
+    @Override
+    public ChainProcessResponse<ChainOperationData> chain(ChainProcessRequest chainProcessRequest) {
+        WenChangChainBody body = new WenChangChainBody();
+        body.setName(chainProcessRequest.getClassName());
+        body.setOperationId(chainProcessRequest.getIdentifier());
+        body.setClassId("nft" + chainProcessRequest.getClassId());
+        body.setOwner(wenChangChainConfiguration.chainAddrSuper());
+        String path = "/v3/native/nft/classes";
+
+        Long currentTime = System.currentTimeMillis();
+        String signature = WenChangChainUtils.signRequest(path, body, currentTime,
+                wenChangChainConfiguration.apiSecret());
+        ChainOperateTypeEnum chainOperateTypeEnum;
+        if (StringUtils.equals(ChainOperateBizTypeEnum.BLIND_BOX.name(), chainProcessRequest.getBizType())) {
+            chainOperateTypeEnum = ChainOperateTypeEnum.BLIND_BOX_CHAIN;
+        } else {
+            chainOperateTypeEnum = ChainOperateTypeEnum.COLLECTION_CHAIN;
+
+        }
+        return doPostExecute(chainProcessRequest, chainOperateTypeEnum, chainRequest -> chainRequest.build(body, path, signature, wenChangChainConfiguration.host(), currentTime));
+    }
+```
+
+3. 调用的这个`doPostExecute`方法还是之前创建链账户的同一个抽象方法，但是这次会走到定时线程池中
+
+```java
+// 定时线程池
+ScheduledExecutorService scheduler = new ScheduledThreadPoolExecutor(10, chainResultProcessFactory);      
+
+if (response.getSuccess() && chainOperateTypeEnum != ChainOperateTypeEnum.USER_CREATE) {
+                //延迟5秒钟之后查询状态并发送 MQ 消息通知上游
+                scheduler.schedule(() -> {
+                    try {
+                        ChainOperateInfo operateInfo = chainOperateInfoService.queryByOutBizId(chainProcessRequest.getBizId(), chainProcessRequest.getBizType(),
+                                chainProcessRequest.getIdentifier());
+                        ChainProcessResponse<ChainResultData> queryChainResult = queryChainResult(
+                                new ChainQueryRequest(chainProcessRequest.getIdentifier(), operateInfoId.toString()));
+                        if (queryChainResult.getSuccess() && queryChainResult.getData() != null) {
+                            if (StringUtils.equals(queryChainResult.getData().getState(), ChainOperateStateEnum.SUCCEED.name())) {
+                                this.sendMsg(operateInfo, queryChainResult.getData());
+
+                                chainOperateInfoService.updateResult(operateInfoId,
+                                        ChainOperateStateEnum.SUCCEED, null);
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.error("query chain result failed,", e);
+                    }
+                }, 5, TimeUnit.SECONDS);
+            }
+
+```
+
+其中的执行逻辑是：等待5S进行请求 + 发送MQ消息到上游，
+
+```java
+    @Override
+    public ChainProcessResponse<ChainResultData> queryChainResult(ChainQueryRequest chainQueryRequest) {
+
+        var operateInfoId = chainOperateInfoService.insertInfo(ChainType.WEN_CHANG.name(),
+                chainQueryRequest.getOperationInfoId(), ChainOperateBizTypeEnum.CHAIN_OPERATION.name(), ChainOperateTypeEnum.COLLECTION_QUERY.name(),
+                JSON.toJSONString(chainQueryRequest), chainQueryRequest.getOperationId());
+
+        String path = "/v3/native/tx/" + chainQueryRequest.getOperationId();
+        Long currentTime = System.currentTimeMillis();
+        String signature = WenChangChainUtils.signRequest(path, null, currentTime,
+                wenChangChainConfiguration.apiSecret());
+
+        ChainRequest chainRequest = new ChainRequest();
+        chainRequest.build(null, path, signature, wenChangChainConfiguration.host(), currentTime);
+
+        ChainResponse result = doGetQuery(chainRequest);
+        log.info("wen chang query result:{}", result);
+
+        // 执行结果一定是成功的，就算三方平台返回的是错误的 ，我们需要将错误信息保存下来，同时设置的依旧是成功的。之后做补偿机制即可。
+        boolean updateResult = chainOperateInfoService.updateResult(operateInfoId,
+                ChainOperateStateEnum.SUCCEED,
+                result.getSuccess() ? result.getData().toString() : result.getError().toString());
+
+        if (!updateResult) {
+            throw new SystemException(RepoErrorCode.UPDATE_FAILED);
+        }
+
+        ChainProcessResponse<ChainResultData> response = new ChainProcessResponse<>();
+        response.setSuccess(result.getSuccess());
+        response.setResponseCode(result.getResponseCode());
+        response.setResponseMessage(result.getResponseMessage());
+        if (result.getSuccess()) {
+            String txHash = result.getData().getString("tx_hash");
+            String status = result.getData().getString("status");
+            var nft = (HashMap) result.getData().get("nft");
+            String nftId = (String) nft.get("id");
+
+            ChainResultData data = new ChainResultData();
+            data.setTxHash(txHash);
+            data.setNftId(nftId);
+            switch (status) {
+                case "0":
+                    data.setState(ChainOperateStateEnum.PROCESSING.name());
+                    break;
+                case "1":
+                    data.setState(ChainOperateStateEnum.SUCCEED.name());
+                    break;
+                case "2":
+                    data.setState(ChainOperateStateEnum.FAILED.name());
+                    break;
+                case "3":
+                    data.setState(ChainOperateStateEnum.INIT.name());
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected value: " + status);
+            }
+            response.setData(data);
+        }
+        return response;
+
+    }
+```
+
+1. 因为上链操作是异步的，先查询chainOperateInfo，将operateId记录下来一并发送到地纬链，可以发现我们在这个方法中一开始就加了操作记录的插入，这个是调用链的操作，不是我们系统的操作，之后做一些参数组装，发送请求；更新操作表数据，将地纬链的返回结果进行组装返回。如果成功的话，MQ发送消息，，更新系统操作记录。
+
+**定时任务轮询查询**
+
+在做定时任务轮询的时候，需要考虑到数据量比较大的情况下，我们不能直接全表扫描，采用的还是分页扫描，`PAGE_SIZE = 5`，同时需要考虑到一种情况，就是如果一直轮询5个数据一直不成功，不能一直在前5个一直查询，需要设计一个`minId`表示每一个扫描的最小值。每一次扫描拿到上一次的最小值，将这个最小值作为这一次的最小值进行扫描，之后进行重新调用查询地纬链的结果接口（还是上面的部分代码），调用成功之后同上进行MQ的消息发送。
+
+因为我们的Chain模块属于系统模块，比较底层的模块。像其他的管理模块、订单模块都是属于应用模块，我们只需要在Chain模块将成功的消息发送到上游即可。代码详情：`ChainProcessJob.java`
 
 
 
