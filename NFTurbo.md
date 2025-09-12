@@ -2320,6 +2320,12 @@ if (response.getSuccess() && chainOperateTypeEnum != ChainOperateTypeEnum.USER_C
 
 
 
+##### 铸造（mint）、交易（transfer）、销毁（destory）
+
+这几个方法跟上述的上链几乎完全相同，除了构造的参数、Path路径之外，我们doPostRequest方法走的都是同一个模版方法。参考代码即可。
+
+
+
 
 
 
