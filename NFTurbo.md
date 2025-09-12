@@ -2326,6 +2326,73 @@ if (response.getSuccess() && chainOperateTypeEnum != ChainOperateTypeEnum.USER_C
 
 
 
+### 订单模块
+
+##### 防止用户的重复下单和重复提交
+
+系统中是利用Token的机制，这个Token是用户访问页面的时候获取到的，之后用户下单购买的时候会进行拦截请求判断。使用的原因是：
+
+1. 用作幂等号，因为它是唯一的。
+2. 实现Redis库存和订单的一致性核对。
+
+生成Token的代码不解释，就是生成一个唯一的ID，UUID。
+
+之后我们定义了一个过滤器：`TokenFilter`
+
+其中的 作用就是拦截到前端的请求（请求我们也是做了特殊限制的，只有/trade/buy接口才会拦截），获取请求头，拿到Token，之后做校验，无效的话报错。
+
+其中，校验Token的逻辑：
+
+```java
+private boolean checkTokenValidity(String token, Boolean isStress) {
+        String result;
+        if (isStress) {
+            //如果是压测，则生成一个随机数，模拟 token
+            result = UUID.randomUUID().toString();
+            STRESS_THREAD_LOCAL.set(isStress);
+        }else{
+            String tokenKey = TokenUtil.getTokenKeyByValue(token);
+
+            String luaScript = """
+                local value = redis.call('GET', KEYS[1])
+                
+                if value ~= ARGV[1] then
+                    return redis.error_reply('token not valid')
+                end
+                
+                redis.call('DEL', KEYS[1])
+                return value""";
+
+            try {
+                /// 6.2.3以上可以直接使用GETDEL命令
+                /// String value = (String) redisTemplate.opsForValue().getAndDelete(token);
+                result = (String) redissonClient.getScript().eval(RScript.Mode.READ_WRITE,
+                        luaScript,
+                        RScript.ReturnType.STATUS,
+                        Arrays.asList(tokenKey), token);
+            } catch (RedisException e) {
+                logger.error("check token failed", e);
+                return false;
+            }
+        }
+
+        TOKEN_THREAD_LOCAL.set(result);
+        return result != null;
+    }
+```
+
+
+
+首先是拿到Token，之后在Redis中进行查询，没有找到报错；之后Redis中删除这个Token，我们之后的逻辑还是需要用到这个Token的，那么我们怎么获取得到呢？可以通过Controller中解析header，但是我们为了简化，采用了ThreadLocal来存储这个Token，一个线程的话，可以随时随地使用这个ThreadLocal，
+
+```java
+public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>();
+```
+
+后续使用的话可以直接从ThreadLocal中获取这个Token。
+
+
+
 
 
 
