@@ -370,6 +370,59 @@ Java中的assert是用于程序调试的，但是Assert这个类是一种快速�
 
 ![image-20250825191301132](NFTurbo/image-20250825191301132.png)
 
+### 接口幂等
+
+接口幂等的方案主要就是三种：`数据库唯一索引约束`、`加互斥锁`、`基于唯一Token做限制`
+
+如果并发量比较低，直接用数据库的唯一约束来做判断即可。捕捉DuplicateKeyException异常来做具体处理。
+
+主要问题是什么呢？
+
+1. 依赖insert，以上操作是需要在insert执行的时候才可以进行操作，比如在创建订单的时候用户连续点击，触发数据库层面的唯一键异常。
+2. 依赖异常处理，在业务代码中需要通过Try catch来进行处理数据库层面的异常，这个异常是Spring 给我们封装提供的应对数据库唯一键约束的异常，但是如果用原生的JDBC，抛出的 异常就是：SQLIntegrityConstraintViolationException。
+3. 依靠数据库做兜底，并发请求全部都是数据库在抗并发，类似于MySQL、postgresql等数据库TPS只有几百到几千，超过的话会出现过载。
+
+并发量较高的情况下需要用到：一锁、二判、三更新。
+
+**一锁：可以加分布式锁，或者悲观锁，但是一定是互斥锁**
+
+**二判：幂等性判断，可以基于状态机、流水表、唯一性索引进行重复操作判断**
+
+**三更新：数据更新**
+
+> 扩展：锁和事务的粒度要处理好
+>
+> 简单来说就是，比如我们使用声明式事务来处理数据库操作请求，但是在事务还没有提交的时候加的锁就已经关闭了，此时就会出现脏数据，处理的方式也很简单，将事务的粒度减少或者将锁的粒度增大。
+>
+> 推荐的方式就是使用编程式事务操作：
+>
+> ```java
+> @Autowired
+> private TransactionTemplate transactionTemplate;
+> 
+> public boolean order(Request request) {
+>     RLock lock = redisson.getLock(request.getIdentifier());
+>     try{
+>       	lock.lock();
+>     
+>         // 执行事务
+>         transactionTemplate.execute(new TransactionCallbackWithoutResult() {
+>             @Override
+>             protected void doInTransactionWithoutResult(TransactionStatus status) {
+>                 // 更新操作
+>                 orderMapper.insert();
+>                 orderStreamMapper.insert();
+>                 //.....
+>             }
+>         })
+>     } finally {
+>         lock.unLock();
+>     }
+> }
+> ```
+
+基于Token的方式也是和上述的解决方案一样，比如在用户下单的时候会先去获取一个Token，之后在真正创建订单的时候需要携带这个Token，按照这个Token进行比对，如果已经重复的话需要直接返回。只需要确保这个Token是唯一的即可。
+
 ### 分布式锁
 
 项目中使用分布式锁注解进行处理各种锁处理。
@@ -2390,6 +2443,10 @@ public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>()
 ```
 
 后续使用的话可以直接从ThreadLocal中获取这个Token。
+
+>  关于幂等性校验参考：[幂等性校验](#接口幂等)
+
+
 
 
 
