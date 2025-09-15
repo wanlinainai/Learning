@@ -850,6 +850,45 @@ public class PraiseListener implements RocketMQListener<PraiseRecordVo>, RocketM
 >
 > 消费者会在第一次消费时从各个队列中各自拉取一条消息进行消费，如果成功之后再拿batchSize数目拉取。
 
+### 秒杀避免超卖
+
+主要还是依赖数据库和Redis。超卖问题，主要就是不要让库存扣减到负数即可。
+
+#### Redis防超卖
+
+Redis是单线程运行的，我们只需要确保每一次线程执行的时候检查有效的库存是否足够即可，避免扣减库存变成负数即可。
+
+```lua
+local key = KEYS[1] -- 商品的键名
+local amount = tonumber(ARGV[1]) -- 扣减的数量
+
+-- 获取商品当前的库存量
+local stock = tonumber(redis.call('get', key))
+
+-- 如果库存足够，减少库存并返回新的库存量
+if stock >= amount then
+    redis.call('decrby', key, amount)
+    return redis.call('get', key)
+else 
+    return "INSUFFICIENT STOCK"
+end
+```
+
+#### 数据库层面防超卖
+
+在数据库扣减时，我们是基于innodb的行锁，我们执行更新库存的操作是在SQL中进行的，
+
+```sql
+update collection
+set saleable_inventory = #{saleableInventory}
+where id = #{id}
+and saleable_inventory > 0
+```
+
+这个剩余库存是已经计算好的，同时因为我们的id是主键，走主键索引，所以会加行锁，锁住id = ************的记录，对于这一条数据的操作便就是原子操作。
+
+只需要保证不会出现超卖问题即可。
+
 ## 功能模块
 
 ### 用户模块设计
