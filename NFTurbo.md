@@ -794,6 +794,62 @@ public class SaTokenConfigure {
 
 结合sentinal
 
+
+
+### MQ削峰填谷
+
+有几点是必须要注意的：
+
+- RocketMQ 的 Consumer获取消息是通过像Broker发送拉取请求获取的，不是有Broker发送Consumer接收的方式
+- Consumer每次拉取消息时消息都会被均匀分发到消息队列再进行传输
+
+```java
+public class MessageController {
+    @Resource
+    private RocketMQTemplate rocketMQTemplate;
+    
+    @PostMapping("/praise")
+    public ServerResponse praise(@RequestBody PraiseRecordVo vo) {
+        rocketMQTemplate.sendOneWay(RocketConstant.Topic.PRAISE_TOPIC, MessageBuilder.withPayload(vo).build());
+        return ServerResponse.success();
+    }
+}
+```
+
+对于消息处理上，如果要求比较宽松，追求性能，可以选用`sendOnWay()`进行消息发送。
+
+> RocketMQ消息发送方式主要含syncSend()同步发送、asyncSend()异步发送、sendOneWay()三种方式，sendOneWay()也是异步发送， 区别在于不需要等到Broker返回确认，所以可能存在消息丢失的状况，但是吞吐量会更高，RocketMQTemplate 的send()方法默认是同步的。
+
+消息消费上，
+
+```java
+public class PraiseListener implements RocketMQListener<PraiseRecordVo>, RocketMQPushConsumerLifecycleListener {
+    @Resource
+    private PraiseRecordService service;
+    
+    @Override
+    public void onMessage(PraiseRecordVo vo) {
+        service.insert(vo.copyProperties(PraiseRecord::new));
+    }
+    
+    @Override
+    public void prepareStart(DefaultMQPushConsumer consumer) {
+        // 每一次拉取的间隔，单位是毫秒
+        consumer.setPullInterval(2000);
+        // 设置每一次从队列中拉取的消息
+        consumer.setPullBatchSize(16);
+    }
+}
+```
+
+> 单次Pull消息的最大数受到了broker的`MessageStoreConfig.maxTransferCountOnMessageInMemory`（默认32）值的限制，想要消费者从队列拉取消息数大于32有效（pullBatchSize > 32）需要更改Broker启动参数`maxTransferCountOnMessageInMemory`值。
+>
+> - pullInterval：每一次从Broker拉取消息的时间间隔，单位是ms
+> - pullBatchSize：每一次从Broker队列中拉取到的消息数，不是总数，是从每一个队列中拉取的数量，总数是队列数 * batchSize
+> - consumerMessageBatchMaxSize：每次消费（将多条消息合并成List消费）的最小消息数量，默认值是1
+>
+> 消费者会在第一次消费时从各个队列中各自拉取一条消息进行消费，如果成功之后再拿batchSize数目拉取。
+
 ## 功能模块
 
 ### 用户模块设计
@@ -2446,7 +2502,21 @@ public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>()
 
 >  关于幂等性校验参考：[幂等性校验](#接口幂等)
 
-
+> 问题：有没有可能在秒杀的场景下，大量请求来请求这个接口获取Token？
+>
+> 我们的这个获取Token的场景是在用户进入到商品详情页时进行请求，所以是存在这个问题的。淘宝的操作是在提交订单的页面进行Token的获取初始化的。这个页面，用户会需要确认收货地址、优惠券等信息。
+>
+> 还有一种方式：针对同一个用户做限制，**让同一个用户在同一个商品同时只能获取同一个token，避免提前获取token进行批量下单。**
+>
+> 想想如何确定同一个用户同一个商品的唯一呢？只要有一个表示能够标志这一个状态即可。
+>
+> `token:buy:29:10085`：token前缀 + 场景值 + : + userId + : + 商品Key即可。
+>
+> 之后获取到value之后存储到Redis中key值都是同一个，会覆盖掉之前的，保留最后一条。
+>
+> 同时做这个设计的原因还有我们可以利用value获取到对应的key值。
+>
+> 最终的值是:`token:buy:29:10085:5ac6542b-64b1-4d41-91b9-e6c55849bb7f`。
 
 
 
