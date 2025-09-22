@@ -2511,7 +2511,11 @@ if (response.getSuccess() && chainOperateTypeEnum != ChainOperateTypeEnum.USER_C
 
 ### 订单模块
 
-##### 防止用户的重复下单和重复提交
+#### 订单状态机
+
+![image-20250922151652510](NFTurbo/image-20250922151652510.png)
+
+#### 防止用户的重复下单和重复提交
 
 系统中是利用Token的机制，这个Token是用户访问页面的时候获取到的，之后用户下单购买的时候会进行拦截请求判断。使用的原因是：
 
@@ -2563,8 +2567,6 @@ private boolean checkTokenValidity(String token, Boolean isStress) {
         return result != null;
     }
 ```
-
-
 
 首先是拿到Token，之后在Redis中进行查询，没有找到报错；之后Redis中删除这个Token，我们之后的逻辑还是需要用到这个Token的，那么我们怎么获取得到呢？可以通过Controller中解析header，但是我们为了简化，采用了ThreadLocal来存储这个Token，一个线程的话，可以随时随地使用这个ThreadLocal，
 
