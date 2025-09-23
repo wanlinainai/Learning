@@ -2594,7 +2594,56 @@ public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>()
 >
 > 最终的值是:`token:buy:29:10085:5ac6542b-64b1-4d41-91b9-e6c55849bb7f`。
 
+#### 秒杀场景：基于Redis + MQ + 数据库实现高并发库存扣减
 
+采用的Redis的原因是：一个是单线程，一个是快。库存扣减在Redis中进行，最终的库存扣减要在数据库进行。因为Redis不可靠。
+
+由于Redis中已经进行了流量拦截处理，真正到大数据库的请求是比较小的。
+
+如何保证Redis扣减成功之后，数据库也可以成功扣减呢？并且可以抗住剩余的并发量呢？并且能在数据库扣减失败之后重试呢？RocketMQ就是一个解决方案。
+
+![image-20250923095843058](NFTurbo/image-20250923095843058.png)
+
+1. 用户请求过来之后，先在Redis中进行库存的扣减，利用了Redis的单线程、高性能机制，可以在有库存的时候多个用户按照顺序进行扣减，如果库存没有了，则失败。
+2. Redis扣减成功的请求，下单的时候库存还是存在的，可以把这个用户的流量放过，MQ发送消息给数据库。
+3. 数据库层面接收到MQ 消息之后，在数据库层面进行库存扣减，这样的流量就会小很多，而且还可以做限流和降级，因为MQ本身可以进行重试，也能控制速率。
+
+![image-20250923100450468](NFTurbo/image-20250923100450468.png)
+
+> 为了保证Redis扣减库存之后MQ一定可以发送成功，用了rocketMQ事务消息。**先发送半消息，再执行本地事务，成功之后再发送另一个半消息。**
+>
+> ![image-20250923103521478](NFTurbo/image-20250923103521478.png)
+>
+> 其中默认的消息保存时间是72小时，可以通过`fileReservedTime `来调整。
+>
+> 文件级别的清理机制：RocketMQ采用的是顺序写入的方式将消息存储在CommitLog中，文件默认大小为1GB,清理按照文件为单位进行清理。
+>
+> - 定时清理：默认是每天凌晨4点清理任务。
+> - 磁盘空间出发清理：磁盘使用率超过阈值（75%）,触发清理。
+> - 手动清理
+
+本地事务中，调用Redis做库存扣减。
+
+![image-20250923105403058](NFTurbo/image-20250923105403058.png)
+
+扣减成功，执行COMMIT。失败，返回ROLLBACK。
+
+同时提供了一个反查询的方法：`checkLocalTransaction`，如果消息丢失，也可以知道是否要提交。
+
+```java
+    @Override
+    public LocalTransactionState checkLocalTransaction(MessageExt messageExt) {
+        OrderCreateRequest orderCreateRequest = JSON.parseObject(JSON.parseObject(new String(messageExt.getBody())).getString("body"), OrderCreateRequest.class);
+        SingleResponse<String> response;
+        InventoryRequest inventoryRequest = new InventoryRequest(orderCreateRequest);
+        response = inventoryFacadeService.getInventoryDecreaseLog(inventoryRequest);
+        return response.getSuccess() && response.getData() != null ? LocalTransactionState.COMMIT_MESSAGE : LocalTransactionState.ROLLBACK_MESSAGE;
+    }
+```
+
+就是利用Redis查询扣减流水记录，如果存在，说明已经扣减过了。
+
+只要Redis扣减成功，就会通过MQ发送出去，之后在order模块中监听这个消息，做订单创建和库存的扣减。
 
 
 
