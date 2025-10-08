@@ -61,6 +61,12 @@ ChatModels，聊天模型、对话模型，底层还是LLMs。
 - 原生支持多轮对话：通过消息列表维护上下文（例如：`[SystemMessage]`、`HumanMessage`、`AIMessage`）
 - 适用场景：对话系统（客服机器人、长期交互的AI助手）
 
+## 如何选择合适的大模型？
+
+https://lmarena.ai/leaderboard。
+
+没有最好的大模型，只有最合适的大模型。上述的排行榜是相对而言更推荐的榜单。可供参考。
+
 
 
 
