@@ -361,6 +361,70 @@ if __name__ == '__main__':
 
 
 
+### Output parsers输出解析器
+
+#### 输出解析器的分类
+
+- **StrOutputParser**：字符串解析器
+- **JsonOutputParser**：JSON解析器
+- **XMLOutputParser**：XML解析器
+- **CommaSeparatedListOutputParser**：CSV解析器
+- **DatetimeOutputParser**：日期时间解析器
+
+- EnumOutputParser：枚举解析器，将LLM输出解析成预定义的枚举值
+- StructuredOutputParser：将非结构化文本转成预定义格式的结构化数据
+- OutputFixingParser：输出修复解析器，用于自动修复格式错误的解析器
+- RetryOutputParser：重试解析器，当主解析器因为格式错误无法解析LLM输出时，通过调用另一个LLM自动修正错误，并重新尝试解析
+
+#### 字符串解析器StrOutputParser
+
+```python
+# 1. 获取大模型
+import os
+import dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+
+chat_model = ChatOpenAI(
+    model="gpt-4o-mini"
+)
+
+# 2. 调用大模型
+response = chat_model.invoke("什么是币安币？简要概述")
+print(type(response))
+
+# 3. 获取字符串的输出结果
+# print(response.content)
+
+parser = StrOutputParser()
+output_str_response = parser.invoke(response)
+print(output_str_response)
+```
+
+输出：
+
+```shell
+<class 'langchain_core.messages.ai.AIMessage'>
+币安币（Binance Coin，简称BNB）是由全球知名的加密货币交易所币安（Binance）发行的一种数字资产。最初，BNB的用途主要是用于支付交易手续费，用户可以使用BNB支付手续费时享受折扣。随着币安生态系统的发展，BNB的应用场景逐渐扩展，包括但不限于：
+
+1. **交易手续费**：在币安平台上使用BNB支付交易手续费可享受折扣。
+2. **平台服务**：BNB可以用于参与币安的各种活动，例如首次发行代币（IEO）、流动性挖掘等。
+3. **支付和消费**：BNB可以在多个商家和服务中作为支付手段使用。
+4. **DeFi和Staking**：BNB可以用于在币安智能链（BSC）上参与去中心化金融（DeFi）项目，以及质押赚取收益。
+
+随着币安不断扩展其产品和服务，BNB的应用也在不断增加。币安币采用了通缩机制，定期回购并销毁一定数量的BNB，这有助于控制供应量并提升其价值。
+```
+
+
+
+
+
+
+
 ## 如何选择合适的大模型？
 
 https://lmarena.ai/leaderboard。
