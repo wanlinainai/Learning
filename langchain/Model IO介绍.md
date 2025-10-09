@@ -351,6 +351,16 @@ if __name__ == '__main__':
 
 > 异步调用的话需要调用的是OpenAI对应的异步方法。
 
+### Prompt Template
+
+几种不同的提示模板：
+
+1. `PromptTemplate`：LLM提示模板，用于**生成字符串提示**。
+1. `ChatPromptTempldate`：聊天提示模板，用于**组合各种角色的消息模板**，传入聊天模型。
+1. `FewShotPromptTempldate`：样本提示词模板，通过示例来教模型如何回答。
+
+
+
 ## 如何选择合适的大模型？
 
 https://lmarena.ai/leaderboard。
