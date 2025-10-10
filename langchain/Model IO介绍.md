@@ -419,9 +419,132 @@ print(output_str_response)
 随着币安不断扩展其产品和服务，BNB的应用也在不断增加。币安币采用了通缩机制，定期回购并销毁一定数量的BNB，这有助于控制供应量并提升其价值。
 ```
 
+#### JSON解析器JsonOutputParser
 
 
 
+一种将大模型自由文本输出转换成结构化JSON数据的工具。
+
+实现方式：
+
+1. 用户自己通过Prompt指明返回JSON格式
+2. 借助JsonOutputParser的`get_format_instructions()`方法生成格式说明，引导大模型输出JSON格式模型
+
+**方式一**
+
+```python
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+chat_model = ChatOpenAI(
+    model="gpt-4o-mini"
+)
+
+chat_prompt_template = ChatPromptTemplate.from_messages([
+    ("system", "你是一个十分靠谱的{role}专家"),
+    ("human", "{question}")
+])
+
+prompt = chat_prompt_template.invoke(input={"role": "数学家", "question": "解释一下什么是傅里叶变换？返回结果使用JSON格式输出"})
+
+response = chat_model.invoke(prompt)
+
+# 获取一个JsonOutputParser
+parser = JsonOutputParser()
+
+# 如果不加上以JSON格式输出的Prompt提示，会报错，原因是输出的response.content是一个字符串
+json_result = parser.invoke(response)
+print(json_result)
+```
+
+输出：
+
+> {'傅里叶变换': {'定义': '傅里叶变换是一种数学变换，用于分析和表示信号在频率域中的特性。它将时间域的信号转换为频率域，帮助我们理解信号的频谱成分。', '用途': ['信号处理', '图像处理', '通讯系统', '音频分析', '振动分析', '量子物理'], '数学表达': {'连续傅里叶变换': {'公式': 'F(ω) = ∫ f(t) e^{-jωt} dt', '说明': 'f(t) 是时间域信号，ω 是频率变量，j 是虚数单位。'}, '离散傅里叶变换': {'公式': 'X[k] = Σ x[n] e^{-j(2π/N)kn}', '说明': 'x[n] 是离散信号，N 是信号长度，k 是频率索引。'}}, '特点': ['线性：输入信号的线性组合对应于输出信号的线性组合。', '时变性：时间域信号的时间平移会导致频域信号的相位变化。', '卷积定理：时域信号的卷积对应于频域信号的乘法。']}}
+
+**方式二**
+
+先看看JsonOuputParser解析器有什么用？
+
+```python
+json_parser = JsonOutputParser()
+print(json_parser.get_format_instructions())
+```
+
+输出：
+
+> Return a JSON object.
+
+可以看到，其实就是在我们的Prompt中加上了一段话：`Return a JSON object.`
+
+```python
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+
+chat_model = ChatOpenAI(model="gpt-4o-mini")
+
+joke_query = "请讲一个笑话"
+
+# 定义解析器
+parser = JsonOutputParser()
+
+# PromptTemplate为示例
+prompt_template = PromptTemplate.from_template(
+    template="回答用户的查询\n 满足的格式为：{format_instructions}\n 问题是：{question}\n",
+    partial_variables={"format_instructions": parser.get_format_instructions()}
+)
+
+prompt = prompt_template.invoke(input={"question": joke_query})
+response = chat_model.invoke(prompt)
+print(response.content)
+print("\n")
+json_response = parser.invoke(response)
+print(json_response)
+```
+
+
+
+输出：
+
+> ```json
+> {
+> "joke": "为什么数学书总是感到忧伤？因为它有太多的问题！"
+> }
+> ```
+>
+> {'joke': '为什么数学书总是感到忧伤？因为它有太多的问题！'}
+
+
+**管道符**
+
+```python
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+
+chat_model = ChatOpenAI(model="gpt-4o-mini")
+
+joke_query = "请讲一个笑话"
+
+# 定义解析器
+parser = JsonOutputParser()
+
+# PromptTemplate为示例
+prompt_template = PromptTemplate.from_template(
+    template="回答用户的查询\n 满足的格式为：{format_instructions}\n 问题是：{question}\n",
+    partial_variables={"format_instructions": parser.get_format_instructions()}
+)
+
+# prompt = prompt_template.invoke(input={"question": joke_query})
+# response = chat_model.invoke(prompt)
+chain = prompt_template | chat_model | parser
+output = chain.invoke({"question": joke_query})
+print(output)
+```
+
+其中管道符是有着严格顺序的：`PromptTemplate` | `ChatModel` | `OutputParser`
+
+输出：
+
+> {'joke': '为什么程序员总是分不清万圣节和圣诞节？因为Oct 31 = Dec 25！'}
 
 
 
