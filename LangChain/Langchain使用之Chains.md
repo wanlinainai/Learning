@@ -467,6 +467,45 @@ Prompt after formatting:
 
 > 上述内容就是做到了可控参数，如果使用SimpleSequentialChain，会报错。output_key输出的参数值对应不上input_key的参数量。
 
+### LLMMathChain的使用
+
+将用户的问题转换成数学问题，之后调用Python的numexpr库。所以使用`LLMMathChain`的前提是需要安装`numexpr`库。
+
+```shell
+pip install numexpr
+```
+
+举例：
+
+```python
+from langchain.chains import LLMMathChain
+import os
+import dotenv
+from langchain_openai import ChatOpenAI
+from langchain.chains import LLMChain
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+# 创建大模型实例
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+llm_math = LLMMathChain.from_llm(llm)
+
+res = llm_math.invoke("100 * 100 + 2 - (199 / 9) 等于多少？")
+
+print(res)
+```
+
+输出：
+
+```shell
+{'question': '100 * 100 + 2 - (199 / 9) 等于多少？', 'answer': 'Answer: 9979.888888888889'}
+```
+
+### RouterChain路由链
+
+路由链用于创建可以自动选择下一条链的链。分析用户的需求，自动引导到对应的链。![image-20251013165201436](Langchain使用之Chains/image-20251013165201436.png)
+
 
 
 
