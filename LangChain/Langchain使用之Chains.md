@@ -108,11 +108,364 @@ bartender 愣了一下，问道：“老虎，你怎么会喝水呢？”
 <class 'str'>
 ```
 
+## 传统Chain的调用
+
+### LLMChain的使用
+
+#### 必要说明
+
+最基础的Chain，必需参数有两个：`llm`和`prompt`。
+
+适合的场景：
+
+- 用于单次问答：输入一个Prompt，输出LLM的输出。
+- 适合无上下文的简单任务。
+- 无记忆
+
+#### 使用
+
+```python
+from langchain.chains.llm import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+import os
+import dotenv
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+chat_model = ChatOpenAI(model="gpt-4o-mini")
+
+template = "桌子上有{number}个苹果，4个桃子，5本书，一共几种水果？"
+prompt = PromptTemplate.from_template(template)
+
+# 使用 LLMChain
+
+chain_llm = LLMChain(
+    llm=chat_model,
+    prompt=prompt
+)
+
+result = chain_llm.invoke({"number": 4})
+
+print(result)
+```
+
+输出结果：
+
+```shell
+C:\Users\admin\AppData\Local\Temp\ipykernel_38240\3885983201.py:15: LangChainDeprecationWarning: The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use :meth:`~RunnableSequence, e.g., `prompt | llm`` instead.
+  chain_llm = LLMChain(
+{'number': 4, 'text': '桌子上有4个苹果和4个桃子。我们只考虑水果的种类，而不是数量。苹果和桃子是两种不同的水果，因此总共有2种水果。'}
+```
+
+> 注意：输出提示中显示了在0.1.17版本便已经过期了，Langchain1.0将真正移除这个LLMChain。推荐使用管道操作符处理：`chain = prompt | chat_model`。[官网提示](https://python.langchain.com/api_reference/langchain/chains/langchain.chains.llm.LLMChain.html)
+
+使用`verbose = True`参数。
+
+```python
+from langchain.chains.llm import LLMChain
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+import os
+import dotenv
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+chat_model = ChatOpenAI(model="gpt-4o-mini")
+
+chat_template = ChatPromptTemplate.from_messages(
+    [
+        ("system", "你是一位{area}领域经验十分丰富的高端技术人才"),
+        ("human", "给我讲一个{adjective}的笑话")
+    ]
+)
 
 
 
+llm_chain = LLMChain(llm=chat_model, prompt=chat_template, verbose=True);
+
+response = llm_chain.invoke({"area": "互联网", "adjective": "上班的牛马"})
+print(response)
+```
+
+输出：
+
+```shell
+> Entering new LLMChain chain...
+Prompt after formatting:
+System: 你是一位互联网领域经验十分丰富的高端技术人才
+Human: 给我讲一个上班的牛马的笑话
+
+> Finished chain.
+{'area': '互联网', 'adjective': '上班的牛马', 'text': '当然可以！这里有一个关于上班的牛马的笑话：\n\n一天，一头牛和一匹马在农场上聊天。牛说：“你知道吗，我每天都得挤奶工作，感觉像是个牛马工厂的员工。”\n\n马笑着说：“那可比我强多了！我每天只需要在跑道上走一圈，生活多轻松啊！”\n\n牛摇摇头，叹了口气说：“是啊，可是你得知道，到了周末的时候，可是没有牛奶喝的！”\n\n马哈哈大笑：“那就对了，谁让你不懂得‘周末放松’的道理呢？” \n\n希望这个小笑话能让你开心！'}
+```
+
+### SimpleSequentialChain顺序链的使用
+
+```python
+from langchain.chains import LLMChain, SimpleSequentialChain, SequentialChain
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+import os
+import dotenv
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+chat_model = ChatOpenAI(model="gpt-4o-mini", streaming=True)
+
+print('----------基础组件初始化----------')
+
+output_parser = StrOutputParser()
+print('\n----------SimpleSequentialChain----------')
+prompt_title = ChatPromptTemplate.from_messages([
+    ("human", "给我一个关于技术主题'{topic}'的吸引人的中文博客标题")
+])
+
+chain_title = LLMChain(llm=chat_model, prompt=prompt_title)
+
+prompt_tweet = ChatPromptTemplate.from_messages([
+    ("human", "为这篇推文题目写一篇推文，标题是：{title}")
+])
+
+chain_tweet = LLMChain(llm=chat_model, prompt=prompt_tweet)
+
+simple_chain = SimpleSequentialChain(chains=[chain_title, chain_tweet], verbose=True)
+
+simple_result = simple_chain.invoke("人工智能在医院智能导诊的作用？")
+
+print(simple_result)
+```
+
+输出：
+
+```shell
+----------基础组件初始化----------
+
+----------SimpleSequentialChain----------
 
 
+> Entering new SimpleSequentialChain chain...
+《智慧医疗新篇章：人工智能如何革新医院导诊体验》
+《智慧医疗新篇章：人工智能如何革新医院导诊体验》
+
+在数字化浪潮的推动下，人工智能正以前所未有的速度重塑医院的导诊体验。通过智能导诊系统，患者能够快速获取个性化的就医指导，减少等待时间，提升便捷性。不仅如此，AI还可以分析患者症状，辅助医护人员做出更精准的诊断。
+
+从智能问诊机器人到虚拟健康助手，AI技术的应用正在改善患者体验，提高医院运营效率。未来，AI将成为医疗服务的得力助手，让每位患者都能享受到更科学、更人性化的保障。
+
+让我们共同期待，智慧医疗带来的无限可能！#智慧医疗 #人工智能 #医院导诊
+
+> Finished chain.
+{'input': '人工智能在医院智能导诊的作用？', 'output': '《智慧医疗新篇章：人工智能如何革新医院导诊体验》\n\n在数字化浪潮的推动下，人工智能正以前所未有的速度重塑医院的导诊体验。通过智能导诊系统，患者能够快速获取个性化的就医指导，减少等待时间，提升便捷性。不仅如此，AI还可以分析患者症状，辅助医护人员做出更精准的诊断。\n\n从智能问诊机器人到虚拟健康助手，AI技术的应用正在改善患者体验，提高医院运营效率。未来，AI将成为医疗服务的得力助手，让每位患者都能享受到更科学、更人性化的保障。\n\n让我们共同期待，智慧医疗带来的无限可能！#智慧医疗 #人工智能 #医院导诊'}
+```
+
+#### SequentialChain的使用
+
+- 多变量支持：不同子链有独立的输入/输出
+- 灵活映射：显式定义 变量如何从一个链到下一个链
+- 复杂流程控制：支持分支、条件逻辑（input_variables和output_variables来配置输入输出）
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains import SequentialChain
+from langchain_openai import ChatOpenAI
+from langchain.chains import LLMChain
+import os
+
+dotenv.load_dotenv()
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+os.environ['OPENAI_BASE_URL'] = os.getenv("OPENAI_BASE_URL")
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+# A Chain
+schainA_template = ChatPromptTemplate([
+    ("system", "你是一个精通各个领域知识的知名教授"),
+    ("human", "尽可能详细的解释一下：{knowledge},以及：{action}")
+])
+schainA_chains = LLMChain(
+    llm=llm,
+    prompt=schainA_template,
+    verbose=True,
+    output_key="schainA_chains_key"
+)
+
+schainB_template = ChatPromptTemplate([
+    ("system", "你非常善于总结文本中的重要信息，并做出简短的总结"),
+    ("human", "这是一个提问十分完整的解释说明内容：{schainA_chains_key}"),
+    ("human", "请你根据上述说明，尽可能简短的输出重要结论，控制在100字左右")
+])
+
+schainB_chains = LLMChain(
+    llm=llm,
+    prompt=schainB_template,
+    verbose=True,
+    output_key="schainB_chains_key"
+)
+
+seq_chain = SequentialChain(
+    chains=[schainA_chains, schainB_chains],
+    input_variables=["knowledge", "action"],
+    output_variables=["schainA_chains_key", "schainB_chains_key"],
+    verbose=True
+)
+
+response = seq_chain.invoke({
+    "knowledge": "国足为什么踢得这么好？",
+    "action": "举一个韦世豪的例子"
+})
+
+# print(response)
+
+# 输出schainA_chains_key
+print("schainA_chains_key输出：" + response["schainA_chains_key"])
+# schainB_chains_key
+print("schainB_chains_key输出" + response["schainB_chains_key"])
+```
+
+输出：
+
+```shell
+
+
+> Entering new SequentialChain chain...
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+System: 你是一个精通各个领域知识的知名教授
+Human: 尽可能详细的解释一下：国足为什么踢得这么好？,以及：举一个韦世豪的例子
+
+> Finished chain.
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+System: 你非常善于总结文本中的重要信息，并做出简短的总结
+Human: 这是一个提问十分完整的解释说明内容：国足在近年来的表现引发了广泛的讨论和分析，但实际上，国足的状态和表现并不能简单地用“踢得好”来形容。相反，近年来国足的表现常常让人失望，甚至遭到批评。以下是一些可能影响国足表现的因素，以及韦世豪作为个例的分析。
+
+### 国足表现不佳的原因
+
+1. **基础设施建设不足**：
+   中国足球的青训系统和基础设施相对不够完善。虽然近年来有越来越多的足球学校和青训基地，但整体水平仍然较低。
+
+2. **战术和技术的局限性**：
+   国足在战术布置和球员技术方面的水平相对薄弱。这导致在与其他国家的球队对抗时，战术应变不灵活，技术细节容易出现失误。
+
+3. **心理素质问题**：
+   国足在面对比赛压力时，尤其是在关键比赛中，往往缺乏应对压力的能力，导致在关键时刻出现失误。
+
+4. **国内联赛水平**：
+   中超联赛的水平虽然引进了一些外籍球员，但过分依赖外援也影响了本土球员的成长和发展。
+
+5. **管理和支持***：
+   国家对足球的重视程度有波动，管理层的更迭和政策的不稳定，有时会导致球队的长期发展受阻。
+
+### 韦世豪的个例分析
+
+韦世豪是一名年轻的攻击型球员，他拥有出色的个人技术和相对较强的速度。他在国家队的一些比赛中表现出了个人能力，但整体表现依然受到更大背景的影响。
+
+1. **个人技术**：韦世豪在个人突破、射门和传球方面具有较强的能力，这让他在比赛中能够制造威胁。
+
+2. **适应能力**：在与不同对手对抗时，韦世豪能够通过快速的调整来适应比赛节奏，这也是他相对较好的表现原因之一。
+
+3. **心理素质**：作为年轻球员，韦世豪在一些比赛中的表现可能会因心态问题而起伏，但有时候他也能够在关键时刻展现出果敢和冷静。
+
+4. **团队配合**：虽然韦世豪个人能力出色，但他在国家队中仍需要与其他队员进行更好的配合，以提高整体的竞争力。
+
+### 总结
+
+国足的表现受限于多方面的因素，无法一概而论。而韦世豪作为其中的代表性球员，虽然有个人才能和发展潜力，却也在整体环境中面临着许多挑战。要想提升国足的整体表现，不仅仅需要依靠个别球员的出色发挥，更需要整体足球体系、青训系统的改革和发展。
+Human: 请你根据上述说明，尽可能简短的输出重要结论，控制在100字左右
+
+> Finished chain.
+
+> Finished chain.
+schainA_chains_key输出：国足在近年来的表现引发了广泛的讨论和分析，但实际上，国足的状态和表现并不能简单地用“踢得好”来形容。相反，近年来国足的表现常常让人失望，甚至遭到批评。以下是一些可能影响国足表现的因素，以及韦世豪作为个例的分析。
+
+### 国足表现不佳的原因
+
+1. **基础设施建设不足**：
+   中国足球的青训系统和基础设施相对不够完善。虽然近年来有越来越多的足球学校和青训基地，但整体水平仍然较低。
+
+2. **战术和技术的局限性**：
+   国足在战术布置和球员技术方面的水平相对薄弱。这导致在与其他国家的球队对抗时，战术应变不灵活，技术细节容易出现失误。
+
+3. **心理素质问题**：
+   国足在面对比赛压力时，尤其是在关键比赛中，往往缺乏应对压力的能力，导致在关键时刻出现失误。
+
+4. **国内联赛水平**：
+   中超联赛的水平虽然引进了一些外籍球员，但过分依赖外援也影响了本土球员的成长和发展。
+
+5. **管理和支持***：
+   国家对足球的重视程度有波动，管理层的更迭和政策的不稳定，有时会导致球队的长期发展受阻。
+
+### 韦世豪的个例分析
+
+韦世豪是一名年轻的攻击型球员，他拥有出色的个人技术和相对较强的速度。他在国家队的一些比赛中表现出了个人能力，但整体表现依然受到更大背景的影响。
+
+1. **个人技术**：韦世豪在个人突破、射门和传球方面具有较强的能力，这让他在比赛中能够制造威胁。
+
+2. **适应能力**：在与不同对手对抗时，韦世豪能够通过快速的调整来适应比赛节奏，这也是他相对较好的表现原因之一。
+
+3. **心理素质**：作为年轻球员，韦世豪在一些比赛中的表现可能会因心态问题而起伏，但有时候他也能够在关键时刻展现出果敢和冷静。
+
+4. **团队配合**：虽然韦世豪个人能力出色，但他在国家队中仍需要与其他队员进行更好的配合，以提高整体的竞争力。
+
+### 总结
+
+国足的表现受限于多方面的因素，无法一概而论。而韦世豪作为其中的代表性球员，虽然有个人才能和发展潜力，却也在整体环境中面临着许多挑战。要想提升国足的整体表现，不仅仅需要依靠个别球员的出色发挥，更需要整体足球体系、青训系统的改革和发展。
+schainB_chains_key输出国足表现不佳的原因包括基础设施不足、战术局限、心理素质差、国内联赛影响及管理不稳定。韦世豪虽具个人才能，但仍受整体环境限制。提升国足需改革整体足球体系和青训系统，而非单靠个别球员的发挥。
+```
+
+```python
+query_chain = LLMChain(
+    llm=llm,
+    prompt=PromptTemplate.from_template(template="请模拟:{product}的市场价格，直接返回一个合理的价格数字，不要包含任何其他文字或单位，只需要数字"),
+    verbose=True,
+    output_key="price"
+)
+
+promo_chain = LLMChain(
+    llm=llm,
+    prompt=PromptTemplate.from_template(template="为{product}（售价：{price}元）创作一篇50字以内的促销文案，要求突出产品重点"),
+    verbose=True,
+    output_key="promo_text"
+)
+
+sequential_chain = SequentialChain(
+    chains=[query_chain, promo_chain],
+    verbose=True,
+    input_variables=["product"],
+    output_variables=["price", "promo_text"]
+)
+
+result = sequential_chain.invoke({"product": "IPhone 17 Pro Max 2TB"})
+
+print(result)
+```
+
+输出：
+
+```shell
+> Entering new SequentialChain chain...
+> Entering new LLMChain chain...
+Prompt after formatting:
+请模拟:IPhone 17 Pro Max 2TB的市场价格，直接返回一个合理的价格数字，不要包含任何其他文字或单位，只需要数字
+
+> Finished chain.
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+为IPhone 17 Pro Max 2TB（售价：15999元）创作一篇50字以内的促销文案，要求突出产品重点
+
+> Finished chain.
+
+> Finished chain.
+{'product': 'IPhone 17 Pro Max 2TB', 'price': '15999', 'promo_text': '尽享极致科技！iPhone 17 Pro Max 2TB，超大存储，拍摄无界限，性能无与伦比。引领潮流，尽在掌握！现售仅15999元，带你体验未来手机的无限可能！快来抢购！'}
+```
+
+> 上述内容就是做到了可控参数，如果使用SimpleSequentialChain，会报错。output_key输出的参数值对应不上input_key的参数量。
 
 
 
