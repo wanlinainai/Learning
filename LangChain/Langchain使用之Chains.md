@@ -506,6 +506,111 @@ print(res)
 
 路由链用于创建可以自动选择下一条链的链。分析用户的需求，自动引导到对应的链。![image-20251013165201436](Langchain使用之Chains/image-20251013165201436.png)
 
+### LCEL 构建的Chain
+
+1. create_sql_query_chain
+2. create_stuff_documents_chain
+3. create_openai_fn_runnable
+4. load_query_constructor_runnable
+5. create_history_aware_retriever
+6. create_retrieval_chain
+
+```python
+# create_sql_query_chain
+
+from langchain_community.utilities import SQLDatabase
+
+db_user = "root"
+db_password = "root"
+db_host = "localhost"
+db_port = "3306"
+db_name = "nfturbo"
+db = SQLDatabase.from_uri(f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+
+print('哪一种数据库', db.dialect)
+print("获取数据表", db.get_usable_table_names())
+res = db.run("SELECT * FROM test;")
+
+print("查询结果:", res)
+```
+
+输出：
+
+```shell
+哪一种数据库 mysql
+获取数据表 ['chain_operate_info', 'collection', 'collection_inventory_stream', 'collection_snapshot', 'collection_stream', 'held_collection', 'notice', 'pay_order', 'refund_order', 'test', 'trade_order_0000', 'trade_order_0001', 'trade_order_0002', 'trade_order_0003', 'trade_order__test', 'trade_order_stream_0000', 'trade_order_stream_0001', 'trade_order_stream_0002', 'trade_order_stream_0003', 'user_operate_stream', 'users']
+查询结果: [(1, 'Liangzhichao')]
+```
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.chains.sql_database.query import create_sql_query_chain
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+chain = create_sql_query_chain(llm=llm, db=db)
+
+response_score = chain.invoke({"question": "数据表test中的谁的分数最高"})
+print(response_score)
+
+response_distinct=chain.invoke({"question": "数据表test中总共有多少个不同的name名字?"})
+print(response_distinct)
+
+response = chain.invoke({"question": "一共多少个数据？", "table_names_to_use": ["test"]})
+
+print(response)
+```
+
+输出：
+
+````shell
+SQLQuery: 
+```sql
+SELECT `id`, `name` 
+FROM `test` 
+ORDER BY `id` DESC 
+LIMIT 1;
+```
+SQLQuery: SELECT COUNT(DISTINCT `name`) AS `unique_name_count` FROM `test`;
+SQLQuery: SELECT COUNT(`id`) AS `total_records` FROM `test`;
+````
+
+**create_stuff_documents_chain**
+
+```python
+# create_stuff_documents_chain
+
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+
+prompt = PromptTemplate.from_template("""
+如下文档{docs}所说，请问香蕉是什么颜色的？
+""")
+
+chain = create_stuff_documents_chain(llm=llm, prompt=prompt, document_variable_name="docs")
+
+docs = [
+    Document(
+        page_content="苹果，学名Malus pumila Mill.，别称西洋苹果、柰，属于蔷薇科苹果属的植物。苹果是全球最广泛种植和销售的水果之一，具有悠久的栽培历史和广泛的分布范围。苹果的原始种群主要起源于中亚的天山山脉附近，尤其是现代哈萨克斯坦的阿拉木图地区，提供了所有现代苹果品种的基因库。苹果通过早期的贸易路线，如丝绸之路，从中亚向外扩散到全球各地。"
+    ),
+    Document(
+        page_content="香蕉是紫色的水果，盛产于热带地区"
+    ),
+    Document(
+        page_content="蓝莓是蓝色的浆果，含有抗氧化物质"
+    )
+]
+
+chain.invoke({"docs": docs})
+```
+
+输出：
+
+```shell
+'香蕉是黄色的水果。虽然文中提到香蕉是紫色的，这并不准确。通常情况下，成熟的香蕉呈黄色。'
+```
+
 
 
 
