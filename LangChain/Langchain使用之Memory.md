@@ -288,6 +288,249 @@ print(res2)
 > 2. AI回答之后，该响应立即加入对话上下文
 > 3. 返回给客户端的结果反应最新状态
 
+### ConversationChain（过期API，使用RunnableWithMessageHistory代替）
+
+ConversationChain是对`ConversationBufferMemory`和`LLMChain`的封装。
+
+```python
+from langchain.chains.conversation.base import ConversationChain
+from langchain.chains import LLMChain
+from langchain_core.prompts.prompt import PromptTemplate
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+template = """
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：{history}
+Human: {input}
+AI: ....
+"""
+
+prompt = PromptTemplate.from_template(template)
+
+chain = ConversationChain(llm=llm, prompt=prompt, verbose=True)
+
+chain.invoke({"input": "你好，你的名字是小智"})
+```
+
+输出：
+
+```shell
+C:\Users\admin\AppData\Local\Temp\ipykernel_44456\3379283954.py:17: LangChainDeprecationWarning: The class `ConversationChain` was deprecated in LangChain 0.2.7 and will be removed in 1.0. Use :class:`~langchain_core.runnables.history.RunnableWithMessageHistory` instead.
+  chain = ConversationChain(llm=llm, prompt=prompt, verbose=True)
+C:\Users\admin\.conda\envs\pyth311\Lib\site-packages\pydantic\main.py:253: LangChainDeprecationWarning: Please see the migration guide at: https://python.langchain.com/docs/versions/migrating_memory/
+  validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+
+
+> Entering new ConversationChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：
+Human: 你好，你的名字是小智
+AI: ....
+
+
+> Finished chain.
+{'input': '你好，你的名字是小智',
+ 'history': '',
+ 'response': 'AI: 你好！我叫小智，很高兴见到你！有什么我可以帮助你的吗？'}
+```
+
+```python
+chain.invoke({"input": "你叫什么？"})
+```
+
+输出：
+
+```shell
+
+
+> Entering new ConversationChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：Human: 你好，你的名字是小智
+AI: AI: 你好！我叫小智，很高兴见到你！有什么我可以帮助你的吗？
+Human: 你叫什么？
+AI: AI: 我叫小智！这是我为自己取的名字。你有什么想聊的吗？
+Human: 你叫什么？
+AI: ....
+
+
+> Finished chain.
+{'input': '你叫什么？',
+ 'history': 'Human: 你好，你的名字是小智\nAI: AI: 你好！我叫小智，很高兴见到你！有什么我可以帮助你的吗？\nHuman: 你叫什么？\nAI: AI: 我叫小智！这是我为自己取的名字。你有什么想聊的吗？',
+ 'response': 'AI: 我叫小智！很高兴和你聊天。之前我提到过我的名字，你还有其他想问的问题吗？'}
+```
+
+省略了LLMChain和Memory。也可以得到相同的结果。
+
+**使用内置默认的提示词模版**
+
+```python
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+conv_chain = ConversationChain(llm=llm)
+
+result_1 = conv_chain.invoke(input="校长有2只猫咪")
+
+result_2 = conv_chain.invoke(input="小白有3只猫咪")
+
+result_3 = conv_chain.invoke(input="两个人加起来有多少只猫?")
+
+print(result_3)
+```
+
+输出：
+
+```shell
+{'input': '两个人加起来有多少只猫?', 'history': 'Human: 校长有2只猫咪\nAI: 哦，真的呀！校长的猫咪是什么品种的呢？它们是长毛猫还是短毛猫？猫咪的名字是什么？我很好奇校长是如何照顾这些猫咪的，是自己养还是有专人打理？猫咪是怎么跟校长互动的呀？它们喜欢玩什么玩具？\nHuman: 小白有3只猫咪\nAI: 哇，小白也有3只猫咪啊！她的猫咪都是哪些品种呢？是同样的品种还是有不同的呢？它们的性格如何？小白有没有给它们起名字？我很好奇她是怎么照顾这3只猫咪的，是自己喂食还是请了帮手？这3只猫咪之间关系如何呢？它们喜欢一起玩还是有些更独立？', 'response': '校长有2只猫咪，小白有3只猫咪，所以两个人加起来一共有5只猫咪！如果你想知道更多关于猫咪的信息或者它们的趣事，随时可以问我哦！'}
+```
+
+### ConversationBufferWindowMemory
+
+ConversationBufferMemory可以无限的将历史消息对话填充到History中，但是这会导致很多问题：
+
+1. 内存十分大
+2. Token消耗大
+
+由此推出了Top K的Memory。
+
+- 适合长文本对话
+- 支持return_messages参数控制
+  - return_messages = True。消息列表
+  - return_messages = False。纯字符串
+
+```python
+from langchain.memory import ConversationBufferWindowMemory
+
+memory = ConversationBufferWindowMemory(k=2, return_messages=True)
+
+memory.save_context({"input": "你好"}, {"output": "你好啊"})
+memory.save_context({"input": "你是谁？"}, {"output": "我是小智"})
+memory.save_context({"input": "请问 1 + 1 = ？"}, {"output": "等于3"})
+
+print(memory.load_memory_variables({}))
+```
+
+结果：
+
+```shell
+{'history': [HumanMessage(content='你是谁？', additional_kwargs={}, response_metadata={}), AIMessage(content='我是小智', additional_kwargs={}, response_metadata={}), HumanMessage(content='请问 1 + 1 = ？', additional_kwargs={}, response_metadata={}), AIMessage(content='等于3', additional_kwargs={}, response_metadata={})]}
+```
+
+```python
+from langchain.chains import LLMChain
+from langchain_core.prompts.prompt import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+template = """
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：{history}
+Human: {question}
+AI: ....
+"""
+# Prompt模版
+prompt_template = PromptTemplate.from_template(template)
+memory = ConversationBufferWindowMemory(k=3, return_messages=False)
+
+conversation_with_summary = LLMChain(
+    llm=llm,
+    prompt=prompt_template,
+    memory=memory,
+    verbose=True
+)
+
+res1 = conversation_with_summary.invoke({"question": "你好，我是孙悟空"})
+print(res1)
+
+res2 = conversation_with_summary.invoke({"question": "我有两个师弟：猪无能和沙悟净"})
+print(res2)
+
+res3 = conversation_with_summary.invoke({"question": "我今年参加了高考，成功考上了TOP 985院校"})
+print(res3)
+
+res4 = conversation_with_summary.invoke({"question": "我是谁？"})
+print(res4)
+```
+
+结果：
+
+```shell
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：
+Human: 你好，我是孙悟空
+AI: ....
+
+
+> Finished chain.
+{'question': '你好，我是孙悟空', 'history': '', 'text': 'AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？'}
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：Human: 你好，我是孙悟空
+AI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？
+Human: 我有两个师弟：猪无能和沙悟净
+AI: ....
+
+
+> Finished chain.
+{'question': '我有两个师弟：猪无能和沙悟净', 'history': 'Human: 你好，我是孙悟空\nAI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？', 'text': 'AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？'}
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：Human: 你好，我是孙悟空
+AI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？
+Human: 我有两个师弟：猪无能和沙悟净
+AI: AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？
+Human: 我今年参加了高考，成功考上了TOP 985院校
+AI: ....
+
+
+> Finished chain.
+{'question': '我今年参加了高考，成功考上了TOP 985院校', 'history': 'Human: 你好，我是孙悟空\nAI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？\nHuman: 我有两个师弟：猪无能和沙悟净\nAI: AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？', 'text': 'AI: 哇，真是太棒了，孙悟空！高考是一项重要的挑战，能够考上985院校意味着你在学业上付出了很多努力和汗水。你可能会在校园里遇到许多新的朋友和有趣的课程。你打算学习什么专业呢？或者在大学生活中你有什么特别期待的事情吗？'}
+
+
+> Entering new LLMChain chain...
+Prompt after formatting:
+
+以下是人类与AI之间的友好对话描述。AI表现得很健谈，并提供了大量来自其上下文的
+具体细节。如果AI不知道问题的答案，它会真诚地表示不知道
+当前对话：Human: 你好，我是孙悟空
+AI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？
+Human: 我有两个师弟：猪无能和沙悟净
+AI: AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？
+Human: 我今年参加了高考，成功考上了TOP 985院校
+AI: AI: 哇，真是太棒了，孙悟空！高考是一项重要的挑战，能够考上985院校意味着你在学业上付出了很多努力和汗水。你可能会在校园里遇到许多新的朋友和有趣的课程。你打算学习什么专业呢？或者在大学生活中你有什么特别期待的事情吗？
+Human: 我是谁？
+AI: ....
+
+
+> Finished chain.
+{'question': '我是谁？', 'history': 'Human: 你好，我是孙悟空\nAI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？\nHuman: 我有两个师弟：猪无能和沙悟净\nAI: AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？\nHuman: 我今年参加了高考，成功考上了TOP 985院校\nAI: AI: 哇，真是太棒了，孙悟空！高考是一项重要的挑战，能够考上985院校意味着你在学业上付出了很多努力和汗水。你可能会在校园里遇到许多新的朋友和有趣的课程。你打算学习什么专业呢？或者在大学生活中你有什么特别期待的事情吗？', 'text': 'AI: 你是孙悟空，一个充满传奇色彩的角色，来自中国古典小说《西游记》，你有着强大的法术和变幻能力，是一个勇敢且智慧的英雄。不过，除了那位著名的角色，你可能还有其他身份，比如学生、朋友等。你想让我知道更多关于你的事情吗？'}
+```
+
 
 
 
