@@ -531,7 +531,273 @@ AI: ....
 {'question': '我是谁？', 'history': 'Human: 你好，我是孙悟空\nAI: AI: 你好，孙悟空！很高兴见到你。你是《西游记》中的英雄，拥有强大的法术和72变的能力。你还有那根如意金箍棒，可以随意变大变小。最近在西天取经的旅途中有什么新的冒险吗？\nHuman: 我有两个师弟：猪无能和沙悟净\nAI: AI: 是的，你的两个师弟都是《西游记》中的重要角色！猪无能，也就是猪八戒，性格憨厚可爱，爱吃懒做，但在关键时刻也能展现出勇气和智慧。他那把八尺钉耙可是个厉害的武器呢。至于沙悟净，他是一个忠诚踏实的人，虽然默默无闻，但在团队中起着非常重要的作用。你们三人一路上经历了很多挑战和考验，最近有遇到什么有趣或危险的事情吗？\nHuman: 我今年参加了高考，成功考上了TOP 985院校\nAI: AI: 哇，真是太棒了，孙悟空！高考是一项重要的挑战，能够考上985院校意味着你在学业上付出了很多努力和汗水。你可能会在校园里遇到许多新的朋友和有趣的课程。你打算学习什么专业呢？或者在大学生活中你有什么特别期待的事情吗？', 'text': 'AI: 你是孙悟空，一个充满传奇色彩的角色，来自中国古典小说《西游记》，你有着强大的法术和变幻能力，是一个勇敢且智慧的英雄。不过，除了那位著名的角色，你可能还有其他身份，比如学生、朋友等。你想让我知道更多关于你的事情吗？'}
 ```
 
+### ConversationTokenBufferMemory
 
+基于Token数量控制的对话记忆机制，超过的话就会将最早的消息删除，保留与最近交流相对应的字符数量
+
+- Token的精准控制
+- 原始对话保留
+
+```python
+from langchain.memory import ConversationTokenBufferMemory
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+memory = ConversationTokenBufferMemory(
+    llm=llm,
+    max_token_limit=5 # 设置最大的Token限制
+)
+
+memory.save_context({"input": "你好"}, {"output": "你好啊"})
+memory.save_context({"input": "北京的天气怎么样？"}, {"output": "天气晴朗"})
+
+# 查看当前记忆
+print(memory.load_memory_variables({}))
+```
+
+结果：
+
+```shell
+{'history': ''}
+```
+
+调整max_token_limit大小为50.
+
+```python
+from langchain.memory import ConversationTokenBufferMemory
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+memory = ConversationTokenBufferMemory(
+    llm=llm,
+    max_token_limit=50 # 设置最大的Token限制
+)
+
+memory.save_context({"input": "你好"}, {"output": "你好啊"})
+memory.save_context({"input": "北京的天气怎么样？"}, {"output": "天气晴朗"})
+
+# 查看当前记忆
+print(memory.load_memory_variables({}))
+```
+
+结果：
+
+```shell
+{'history': 'Human: 你好\nAI: 你好啊\nHuman: 北京的天气怎么样？\nAI: 天气晴朗'}
+```
+
+### ConversationSummaryMemory
+
+智能压缩对话历史的记忆机制，通过LLM自动将对话内容精简摘要。不存储原始文本。
+
+- 摘要生成
+- 动态更新
+- 上下文优化
+
+```python
+from langchain.memory import ConversationSummaryMemory
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+# 实例化
+memory = ConversationSummaryMemory(
+    llm=llm
+)
+
+memory.save_context({"input": "你好"}, {"output": "你好啊"})
+memory.save_context({"input": "北极有什么？"}, {"output": "北极有火烈鸟"})
+memory.save_context({"input": "我上一个问题是什么？"}, {"output": "你好，北极有什么？"})
+
+print(memory.load_memory_variables({}))
+```
+
+结果：
+
+```shell
+{'history': 'The human greets the AI in Chinese, asking "Hello?" The AI responds with a greeting in return. The human then asks what is found in the Arctic, and the AI responds that there are flamingos in the Arctic. The human later inquires about their previous question, to which the AI reiterates that the human\'s last question was about what is found in the Arctic.'}
+```
+
+如果实例化Memory之前已经存在历史消息，可以使用：from_messages()方法
+
+```python
+from langchain.memory import ChatMessageHistory
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+# 模拟历史消息记录
+history = ChatMessageHistory()
+history.add_user_message("你好，你是哪个？")
+history.add_ai_message("你好，我是小智")
+
+memory = ConversationSummaryMemory.from_messages(
+    llm=llm,
+    chat_memory=history
+)
+
+print(memory.load_memory_variables({}))
+
+memory.save_context(inputs={"human": "我的名字是小白"},outputs={"AI": "很不高兴认识你，小黑"})
+
+print(memory.load_memory_variables({}))
+
+print(memory.chat_memory.messages)
+```
+
+结果：
+
+```shell
+{'history': 'The human greets the AI and asks who it is. The AI responds that it is named Xiao Zhi.'}
+{'history': 'The human greets the AI and asks who it is. The AI responds that it is named Xiao Zhi. The human shares their name as Xiao Bai, and the AI expresses that it is not pleased to meet Xiao Hei.'}
+[HumanMessage(content='你好，你是哪个？', additional_kwargs={}, response_metadata={}), AIMessage(content='你好，我是小智', additional_kwargs={}, response_metadata={}), HumanMessage(content='我的名字是小白', additional_kwargs={}, response_metadata={}), AIMessage(content='很不高兴认识你，小黑', additional_kwargs={}, response_metadata={})]
+```
+
+### ConversationSummaryBufferMemory
+
+是一种混合记忆机制。结合了`ConversationBufferMemory`和`ConversationSummaryMemory`的优点，保留最近的对话内容的同时，能够对较早的对话进行概括。
+
+- 保留最近N条的原始对话信息，确保最近交互的完整上下文
+- 摘要较早的信息，超出缓冲区的进行概括压缩
+- 平衡细节和效率：既不会丢失关键细节，又可以处理长对话
+
+```python
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=30,
+    return_messages=True
+)
+
+memory.save_context({"input": '你好。我的名字是小陈谷'}, {"output": "很不高兴认识你，小程"})
+memory.save_context({"input": "李白是哪个朝代的诗人"}, {"output": "李白是唐朝诗人"})
+memory.save_context({"input": "唐宋八大家里有苏轼吗？"}, {"output": "有的兄弟"})
+
+print(memory.load_memory_variables({}))
+
+print(memory.chat_memory.messages)
+```
+
+结果：
+
+```shell
+{'history': [SystemMessage(content='The human introduces themselves as 小陈谷. The AI expresses that it is not pleased to meet 小陈谷. The human asks about the poet 李白, and the AI responds that 李白 is a poet from the Tang Dynasty.', additional_kwargs={}, response_metadata={}), HumanMessage(content='唐宋八大家里有苏轼吗？', additional_kwargs={}, response_metadata={}), AIMessage(content='有的兄弟', additional_kwargs={}, response_metadata={})]}
+[HumanMessage(content='唐宋八大家里有苏轼吗？', additional_kwargs={}, response_metadata={}), AIMessage(content='有的兄弟', additional_kwargs={}, response_metadata={})]
+```
+
+```python
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=90,
+    return_messages=True
+)
+
+memory.save_context({"input": '你好。我的名字是小陈谷'}, {"output": "很不高兴认识你，小程"})
+memory.save_context({"input": "李白是哪个朝代的诗人"}, {"output": "李白是唐朝诗人"})
+memory.save_context({"input": "唐宋八大家里有苏轼吗？"}, {"output": "有的兄弟"})
+
+print(memory.load_memory_variables({}))
+
+print(memory.chat_memory.messages)
+```
+
+结果：
+
+```shell
+{'history': [HumanMessage(content='你好。我的名字是小陈谷', additional_kwargs={}, response_metadata={}), AIMessage(content='很不高兴认识你，小程', additional_kwargs={}, response_metadata={}), HumanMessage(content='李白是哪个朝代的诗人', additional_kwargs={}, response_metadata={}), AIMessage(content='李白是唐朝诗人', additional_kwargs={}, response_metadata={}), HumanMessage(content='唐宋八大家里有苏轼吗？', additional_kwargs={}, response_metadata={}), AIMessage(content='有的兄弟', additional_kwargs={}, response_metadata={})]}
+[HumanMessage(content='你好。我的名字是小陈谷', additional_kwargs={}, response_metadata={}), AIMessage(content='很不高兴认识你，小程', additional_kwargs={}, response_metadata={}), HumanMessage(content='李白是哪个朝代的诗人', additional_kwargs={}, response_metadata={}), AIMessage(content='李白是唐朝诗人', additional_kwargs={}, response_metadata={}), HumanMessage(content='唐宋八大家里有苏轼吗？', additional_kwargs={}, response_metadata={}), AIMessage(content='有的兄弟', additional_kwargs={}, response_metadata={})]
+```
+
+**模拟客服对话**
+
+```python
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chains.llm import LLMChain
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    max_tokens=500
+)
+
+# 模版
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "你是电商客服助手，用中文友好回复用户问题。保持专业但亲切的语气。"),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}")
+])
+# 记忆
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=400,
+    memory_key="chat_history",
+    return_messages=True
+)
+# 对话链
+chain = LLMChain(
+    llm=llm,
+    prompt=prompt,
+    memory=memory,
+)
+# 多轮对话内容
+dialogue = [
+    "你好，我想查询订单12345的状态",
+    "这个订单是上周五下的",
+    "我现在急着用，能加急处理吗",
+    "等等，我可能记错订单号了，应该是12346",
+    "对了，你们退货政策是怎样的"
+]
+# 执行对话
+for user_input in range(len(dialogue)):
+    response = chain.invoke({"input": dialogue[user_input]})
+    print(f"用户：{dialogue[user_input]}")
+    print(f"回答：{response['text']}\n")
+# 查看记忆状态
+print("\n=======当前记忆状态========")
+print(memory.load_memory_variables({}))
+```
+
+结果：
+
+```shell
+用户：你好，我想查询订单12345的状态
+回答：您好！感谢您联系我。关于订单12345的状态，我需要您提供一下相关信息，例如下单的邮箱或者手机号，以便我为您查询。谢谢！
+
+用户：这个订单是上周五下的
+回答：感谢您提供的信息！请稍等片刻，我来帮您查询一下订单12345的状态。查询完毕，我会尽快回复您。谢谢您的耐心等待！
+
+用户：我现在急着用，能加急处理吗
+回答：我理解您的紧急需求，非常抱歉给您带来不便。不过，订单处理的具体方式通常由我们的物流系统决定，我建议您可以拨打客服热线以寻求更快速的加急处理方案。请让我知道是否需要我提供客服热线的联系方式，或是其他我可以帮助您的地方。谢谢您的理解！
+
+用户：等等，我可能记错订单号了，应该是12346
+回答：没问题！感谢您更正订单号。请稍等片刻，我会尽快查询订单12346的状态。稍后将尽快回复您！谢谢您的耐心。
+
+用户：对了，你们退货政策是怎样的
+回答：我们的退货政策如下：
+
+1. **退货期限**：通常在收到商品后7天内可以申请退货。
+2. **商品状态**：退货商品必须保持未使用状态，且保留原包装和配件。
+3. **申请方式**：您可以通过我们的官方网站或客服热线申请退货。提交申请后，我们会进行审核。
+4. **运费**：如果是因商品质量问题导致的退货，我们将承担运费；若是因为个人原因，返回运费通常由您承担。
+
+如有其他具体问题，欢迎随时询问！希望能帮到您！
+
+
+=======当前记忆状态========
+{'chat_history': [SystemMessage(content='The human asks about the status of order 12345.', additional_kwargs={}, response_metadata={}), AIMessage(content='您好！感谢您联系我。关于订单12345的状态，我需要您提供一下相关信息，例如下单的邮箱或者手机号，以便我为您查询。谢谢！', additional_kwargs={}, response_metadata={}), HumanMessage(content='这个订单是上周五下的', additional_kwargs={}, response_metadata={}), AIMessage(content='感谢您提供的信息！请稍等片刻，我来帮您查询一下订单12345的状态。查询完毕，我会尽快回复您。谢谢您的耐心等待！', additional_kwargs={}, response_metadata={}), HumanMessage(content='我现在急着用，能加急处理吗', additional_kwargs={}, response_metadata={}), AIMessage(content='我理解您的紧急需求，非常抱歉给您带来不便。不过，订单处理的具体方式通常由我们的物流系统决定，我建议您可以拨打客服热线以寻求更快速的加急处理方案。请让我知道是否需要我提供客服热线的联系方式，或是其他我可以帮助您的地方。谢谢您的理解！', additional_kwargs={}, response_metadata={}), HumanMessage(content='等等，我可能记错订单号了，应该是12346', additional_kwargs={}, response_metadata={}), AIMessage(content='没问题！感谢您更正订单号。请稍等片刻，我会尽快查询订单12346的状态。稍后将尽快回复您！谢谢您的耐心。', additional_kwargs={}, response_metadata={}), HumanMessage(content='对了，你们退货政策是怎样的', additional_kwargs={}, response_metadata={}), AIMessage(content='我们的退货政策如下：\n\n1. **退货期限**：通常在收到商品后7天内可以申请退货。\n2. **商品状态**：退货商品必须保持未使用状态，且保留原包装和配件。\n3. **申请方式**：您可以通过我们的官方网站或客服热线申请退货。提交申请后，我们会进行审核。\n4. **运费**：如果是因商品质量问题导致的退货，我们将承担运费；若是因为个人原因，返回运费通常由您承担。\n\n如有其他具体问题，欢迎随时询问！希望能帮到您！', additional_kwargs={}, response_metadata={})]}
+```
+
+如果将缓冲区Token限制缩小，最终的结果会是概括总结的内容。
 
 
 
