@@ -391,6 +391,80 @@ Invoking: `Search` with `特斯拉当前股价`
 查询结果：{'input': '特斯拉当前股价是多少？相较于去年来说上涨了多少？', 'output': '当前特斯拉（Tesla, TSLA）的股价为 **435.54 美元**。根据过去一年的数据，特斯拉的股价在52周内的最低点为 **212.11 美元**，因此相较于去年的最低点，当前股价上涨了：\n\n\\[\n\\text{上涨幅度} = \\frac{435.54 - 212.11}{212.11} \\times 100\\%\n\\]\n\n计算得出上涨幅度为：\n\n\\[\n\\text{上涨幅度} \\approx 105.6\\%\n\\]\n\n因此，特斯拉的股价相较于去年的最低点上涨了约 **105.6%**。'}
 ```
 
+#### 自定义函数和工具
+
+需求：计算3的平方。Agent自动调用工具完成
+
+```python
+def simple_calculator(expression: str) -> str:
+    """
+    基础数学计算工具，支持加减乘除和幂运算
+    参数:
+    expression: 数学表达式字符串，如 "3+5" 或 "2**3"
+    返回:
+    计算结果字符串或错误信息
+    """
+    print("\n只因你太美")
+    print(f"\n[工具调用]：计算表达式：{expression}")
+    return str(eval(expression))
+
+# 定义工具
+math_calculator_tool = Tool(
+    name="Math_calculator",
+    func=simple_calculator, # 使用自定义的方法函数名
+    description="用于执行数学计算，输入的必须是纯数学表达式:(如'3 + 5'或'3**2'表示平方)。不支持字母或其他特殊符号"
+)
+
+llm = ChatOpenAI(
+    model_name="gpt-4o-mini",
+    temperature=0,
+)
+
+agent_executor = initialize_agent(
+    tools=[math_calculator_tool],
+    llm=llm,
+    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True
+)
+
+print("========测试：自定义工具调用=========")
+result = agent_executor.invoke(input={"input": "计算3的平方"})
+print(f"查询结果：{result}")
+```
+
+结果：
+
+```shell
+========测试：自定义工具调用=========
+
+
+> Entering new AgentExecutor chain...
+我需要计算3的平方，这可以用数学表达式3**2来表示。  
+Action: Math_calculator  
+Action Input: 3**2  
+只因你太美
+
+[工具调用]：计算表达式：3**2
+
+Observation: 9
+> Entering new AgentExecutor chain...
+我需要计算3的平方，这可以用数学表达式3**2来表示。  
+Action: Math_calculator  
+Action Input: 3**2  
+只因你太美
+
+[工具调用]：计算表达式：3**2
+
+Observation: 9
+Thought:我现在知道最终答案  
+Final Answer: 9
+
+> Finished chain.
+查询结果：{'input': '计算3的平方', 'output': '9'}
+```
+
+可以看到输出了：只因你太美，确实已经调用到了我们自定义的函数`simple_calculator`
+
 ### 通用方式
 
 
