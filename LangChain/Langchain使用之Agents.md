@@ -467,11 +467,220 @@ Final Answer: 9
 
 ### 通用方式
 
+#### FUNCTION_CALL模型
+
+```python
+import os
+import dotenv
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_community.tools import TavilySearchResults
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+
+dotenv.load_dotenv()
+os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
+
+# 搜索工具
+search = TavilySearchResults(max_results=5)
+
+# 自定义提示词模版
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system", "你是一个乐于助人的助手，请务必使用tavily_search_results_json 工具获取信息"),
+    ("human", "{input}"),
+    ("placeholder", "{agent_scratchpad}")
+])
+
+# 定义LLM
+llm = ChatOpenAI(
+    model_name="gpt-4o-mini"
+)
+# 创建Agent对象
+agent = create_tool_calling_agent(
+    llm=llm,
+    tools=[search],
+    prompt=prompt_template
+)
+# 创建AgentExecutor执行器
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=[search],
+    verbose=True
+)
+# 测试
+result = agent_executor.invoke({"input": "今天北京的天气怎么样？"})
+print(result)
+```
+
+结果：
+
+```shell
+....
+今天北京的天气情况如下：
+
+- **气温**：大约在11°C到20°C之间。
+- **天气状况**：有可能出现零星小雨，整体天气偏阴。
+- **相对湿度**：较高，达到了100%。
+- **风速**：轻风，约2.2 mph（约3.5公里每小时）。
+
+总的来说，北京今天的天气是比较凉爽和潮湿的，适合穿着稍厚的衣物。如果你有出行计划，建议带上雨具以防万一。
+
+> Finished chain.
+{'input': '今天北京的天气怎么样？', 'output': '今天北京的天气情况如下：\n\n- **气温**：大约在11°C到20°C之间。\n- **天气状况**：有可能出现零星小雨，整体天气偏阴。\n- **相对湿度**：较高，达到了100%。\n- **风速**：轻风，约2.2 mph（约3.5公里每小时）。\n\n总的来说，北京今天的天气是比较凉爽和潮湿的，适合穿着稍厚的衣物。如果你有出行计划，建议带上雨具以防万一。'}
+```
+
+> agent_scratchpad参数必须声明，用于存储和传递Agent的思考过程。该参数保留历史步骤，避免上下文丢失，format方法会将intermediate_steps转成特定格式字符串，并赋值agent_scratchpad变量，都则报错：KeyError:"intermediate_steps"错误。
+
+#### ReAct模式
+
+提示词需要体现需要调用的工具、用户输入、agent_scratchpad。
+
+远程的提示词模版通过https://smith.langchain.com/hub/hwchase17获取。
+
+**PromptTemplate 模版**
+
+```python
+from langchain import hub
+from langchain.agents.react.agent import create_react_agent
+tools = [TavilySearchResults(max_results=5)]
+
+# 远程获取模版， 其中提供了默认的提示词模版
+template = hub.pull("hwchase17/react")
+
+llm = ChatOpenAI(
+    model_name="gpt-4o-mini"
+)
+
+agent = create_react_agent(
+    llm=llm,
+    tools=tools,
+    prompt=template
+)
+
+agent_executor = AgentExecutor(
+    agent=agent, tools=tools,
+    verbose=True, handle_parsing_errors=True
+)
+
+agent_executor.invoke({"input": "今天济南章丘的天气怎么样？"})
+```
+
+结果：
+
+```shell
+> Entering new AgentExecutor chain...
+我需要查找关于济南章丘今天的天气信息。  
+Action: tavily_search_results_json  
+> Entering new AgentExecutor chain...
+我需要查找关于济南章丘今天的天气信息。  
+Action: tavily_search_results_json  
+> Entering new AgentExecutor chain...
+我需要查找关于济南章丘今天的天气信息。  
+Action: tavily_search_results_json  
+Action Input: "今天 济南 章丘 天气"  [{'title': '章丘天气预报,章丘7天天气预报,章丘15天天气预报,章丘天气查询', 'url': 'https://www.weather.com.cn/weather/101120104.shtml?', 'content': '15日（今天）. 小雨转晴. 20/12℃. <3级 · 16日（明天）. 小雨. 20/13℃. <3级 · 17日（后天）. 中雨转小雨. 15/11℃. <3级 · 18日（周六）. 多云. 14/6℃. <3级 · 19日（周日）. 多云. 14/5℃.', 'score': 0.98501}, {'title': '章丘天气预报,章丘7天天气预报,章丘15天天气预报,章丘天气查询', 'url': 'https://www.weather.com.cn/weather/101120104.shtml', 'content': '14日（今天）. 多云转阴. 22/15℃. <3级 · 15日（明天）. 小雨转多云. 20/14℃. <3级 · 16日（后天）. 多云转小雨. 21/14℃. <3级 · 17日（周五）. 小雨. 16/8℃. <3级 · 18日（周六）. 晴.', 'score': 0.98216}, {'title': '章丘 - 中国气象局-天气预报-城市预报', 'url': 'http://weather.cma.cn/web/weather/54727.html', 'content': '星期三 10/15. 小雨 · 20℃ ; 星期四 10/16. 小雨 · 20℃ ; 星期五 10/17. 中雨 · 15℃ ; 星期六 10/18. 多云 · 14℃ ; 星期日 10/19. 多云 · 14℃.', 'score': 0.98164}, {'title': '章丘-天气预报 - 中央气象台', 'url': 'https://www.nmc.cn/publish/forecast/ASD/zhangqiu.html', 'content': '10/11 周六. 小雨 · 14℃ ; 10/12 周日. 小雨 · 15℃ ; 10/13 周一. 阴 · 18℃ ; 10/14 周二. 多云 · 22℃ ; 10/15 周三. 小雨 · 21℃.', 'score': 0.97211}, {'title': '章丘区天气预报15天查询', 'url': 'https://tianqi.moji.com/forecast15/china/shandong/zhangqiu-district', 'content': '随时随地 想查就查 * 天气 * 中国 * 山东省 * 章丘区 小雨~~转~~晴 **01:09更新** 2025年09月03日 乙巳[蛇]年 七月十二 *热门时景* 更多 * ## 四川省凉山彝族自治州盐源县泸沽湖镇亚泸路泸沽湖风景名胜区 * ## 安徽省黄山市休宁县溪口镇詹家山 *附近地区* 更多 * 济南市 * 长清区 * 平阴县 * 济阳区 * 商河县 * 天桥区 * 莱芜区（原莱芜市） * 趵突泉 *附近景点* 更多 * 房干生态旅游区 * 莱芜战役纪念馆 * 莲花圣境 * 吕祖泉旅游区 * 趵突泉公园 * 大明湖公园 * 红叶谷 * 济南国际园博园 ## 15天预报 01:09更新 * 周二 多云 **31°** **23°** * 周三 小雨 **28°** **20°** * 周四 **29°** **21°** * 周五 小雨 **32°** **24°** 中雨 * 周六 小雨 **27°** **20°** 多云 * 周日 多云 **30°** **22°** 多云 * 周一 多云 **27°** **16°** * 周二 **30°** **20°** * 周三 多云 **29°** **20°** * 周四 小雨 小雨 小雨 小雨 小雨 小雨 小雨 小雨 小雨 小雨', 'score': 0.95331}]我现在知道，今天济南章丘的天气是小雨转晴，气温在20℃到12℃之间。  
+Final Answer: 今天济南章丘的天气是小雨转晴，气温20℃/12℃。
+> Finished chain.
+```
 
 
 
+> 我们使用了`pub.pull("hwchase17/react")`来定义模版，原因是其中包含我们需要的tool_names、tools、agent_scratchpad等参数
+>
+> ![image-20251016002306344](images/Langchain使用之Agents/image-20251016002306344.png)
 
+**ChatPromptTemplate 模版**
 
+```python
+from langchain.agents.react.agent import create_react_agent
+tools = [TavilySearchResults(max_results=5)]
+
+# 提示词模版
+template_str = """
+Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+"""
+chat_prompt_template = ChatPromptTemplate.from_messages([
+    ("system", template_str),
+    ("human", "我的问题是：{input}"),
+    ("system", "Thought:{agent_scratchpad}")
+])
+
+llm = ChatOpenAI(
+    model_name="gpt-4o-mini"
+)
+
+agent = create_react_agent(
+    llm=llm,
+    tools=tools,
+    prompt=chat_prompt_template
+)
+
+agent_executor = AgentExecutor(
+    agent=agent, tools=tools,
+    verbose=True, handle_parsing_errors=True,
+    max_iterations=6
+)
+
+result = agent_executor.invoke({"input": "今天深圳的天气怎么样？"})
+
+print(result)
+```
+
+输出：
+
+```shell
+....
+我已经获取了关于今天深圳天气的最新信息，以下是总结：  
+
+- 深圳的天气总体为晴天间多云，局部有短时阵雨。
+- 气温范围在26-33℃之间，具体气温为：当前约30.2℃，最高可达到33.7℃。
+- 湿度在64%左右，风速约为2-3级，主要风向为东南风。
+
+因此，今天深圳的天气相对炎热，中午时段可能有短时降雨，适合在室内或避开雨点的地方进行活动。  
+Final Answer: 今天深圳的天气为晴天间多云，局部有短时阵雨，气温26-33℃。
+```
+
+> 注意：
+>
+> 1. agent_scratchpad变量所在的位置一定要在input输出之后，也就是：
+>
+> ```python
+>     ("system", template_str),
+>     ("human", "我的问题是：{input}"),
+>     ("system", "Thought:{agent_scratchpad}")
+> ```
+>
+> 如果调换位置的话会一直处于循环状态无法跳出。
+>
+> 原因也很简单，
+> System: [规则说明] 
+>
+> System: Thought: [之前的思考和观察历史] 
+>
+> Human: 我的问题是：今天深圳的天气怎么样？
+>
+> 这个Thought出现的位置在input之前，导致ReAct逻辑流程出错，“为什么问题在最后？我应该继续回答历史记录还是新问题？”导致一直循环。
+>
+> 2. {agent_scratchpad}变量之间的必须是英文，不能是：
+>
+> ```python
+> ("system", "思考是:{agent_scratchpad}")
+> ```
+>
+> 会提示报错，找不到Thought
 
 
 
