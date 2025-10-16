@@ -1,0 +1,73 @@
+{
+  "user": {
+    "id": 102938,
+    "username": "liang_zhichao",
+    "profile": {
+      "nickname": "志超",
+      "email": "liang.zhichao@example.com",
+      "phone": "+86-13800138000",
+      "birth_date": "1997-09-12",
+      "gender": "male",
+      "verified": true,
+      "address": {
+        "country": "China",
+        "province": "Shandong",
+        "city": "Jinan",
+        "zip_code": "250000",
+        "geo": {
+          "lat": 36.6502,
+          "lng": 117.1201
+        }
+      }
+    },
+    "preferences": {
+      "language": ["zh-CN", "en-US"],
+      "theme": "dark",
+      "notifications": {
+        "email": true,
+        "sms": false,
+        "push": {
+          "enabled": true,
+          "sound": "default",
+          "vibration": true
+        }
+      }
+    }
+  },
+  "projects": [
+    {
+      "id": "P-001",
+      "name": "Internet Hospital Platform",
+      "status": "in_progress",
+      "progress": 0.68,
+      "team": [
+        { "name": "Alice", "role": "Frontend Developer" },
+        { "name": "Bob", "role": "Backend Engineer" },
+        { "name": "Carol", "role": "Tester" }
+      ],
+      "last_update": "2025-10-16T09:30:00Z"
+    },
+    {
+      "id": "P-002",
+      "name": "Mobile Nursing App",
+      "status": "completed",
+      "progress": 1.0,
+      "team": [
+        { "name": "David", "role": "UI Designer" },
+        { "name": "Eva", "role": "Product Manager" }
+      ],
+      "last_update": "2025-09-05T14:00:00Z"
+    }
+  ],
+  "system": {
+    "version": "3.2.1",
+    "release_date": "2025-10-10",
+    "active_users": 5283,
+    "maintenance": null,
+    "features": {
+      "ai_assistant": true,
+      "data_sync": true,
+      "multi_tenant": false
+    }
+  }
+}
