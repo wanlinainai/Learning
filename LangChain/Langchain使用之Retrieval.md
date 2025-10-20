@@ -367,6 +367,28 @@ print("\n回答:", result.content)
 
 
 
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.nju.edu.cn",
+    "https://registry.docker-cn.com",
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com",
+    "https://5tqw56kt.mirror.aliyuncs.com",
+    "https://docker.hpcloud.cloud",
+    "http://mirrors.ustc.edu.cn",
+    "https://docker.chenby.cn",
+    "https://docker.ckyl.me",
+    "http://mirror.azure.cn",
+    "https://hub.rat.dev"
+  ]
+}
+
+
+
+
+
 
 
 
