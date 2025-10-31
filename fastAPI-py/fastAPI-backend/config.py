@@ -12,7 +12,9 @@ class Config(BaseSettings):
     PROJECT_NAME: str = "fastapi-demo"
     DESCRIPTION: str = "fastapi项目DEMO"
     # 静态资源目录
-    STATIC_DIR: str = os.path.join(os.getcwd(), "../static")
+    STATIC_DIR: str = os.path.join(os.getcwd(), "static")
+    # Session密钥
+    SECRET_KEY: str = "your-secret-key-here-change-in-production"
 
     # 跨域请求
     CORS_ORIGINS: List[str] = ['*']

@@ -28,7 +28,7 @@ async def http_exception_handler(_: Request, exec: HTTPException):
 """
 @Description 自定义的Unicorn异常
 """
-async def UnicornException(Exception):
+class UnicornException(Exception):
     def __init__(self, code, errmsg, data=None):
         """
         失败返回的格式
