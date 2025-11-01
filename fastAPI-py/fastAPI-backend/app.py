@@ -6,7 +6,7 @@ from tortoise.exceptions import ValidationError
 
 from config import settings
 from core.Events import startup, stopping
-from core import Exception, Middleware
+from core import Exception, Middleware, Router
 from api.Base import router
 
 application = FastAPI(
@@ -36,7 +36,7 @@ application.add_middleware(
 )
 
 # 路由
-application.include_router(router)
+application.include_router(Router.router)
 
 # 静态资源目录
 application.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name="static")
