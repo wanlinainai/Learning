@@ -11,8 +11,8 @@ from api.Base import router
 
 application = FastAPI(
     debug=settings.APP_DEBUG,
-    docs_url=None,
-    redoc_url=None,
+    docs_url="/docs",  # 启用 Swagger UI，使用默认路径
+    redoc_url="/redoc",  # 启用 ReDoc
 )
 
 # 事件监听
@@ -39,6 +39,6 @@ application.add_middleware(
 application.include_router(router)
 
 # 静态资源目录
-application.mount('/', StaticFiles(directory=settings.STATIC_DIR), name="static")
+application.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 app = application
