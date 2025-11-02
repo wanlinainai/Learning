@@ -69,3 +69,25 @@ async def http422_exception_handler(request: Request, exec: Union[RequestValidat
         "message": exec.errors(),
         "data": None
     }, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    全局异常处理器 - 捕获所有未处理的异常
+    :param request:
+    :param exc:
+    :return:
+    """
+    import traceback
+    import logging
+
+    # 记录详细的错误日志到后端
+    logging.error(f"Global exception handler caught: {exc}")
+    logging.error(traceback.format_exc())
+
+    # 返回给前端的通用错误信息（不包含敏感的堆栈信息）
+    return JSONResponse({
+        "code": 500,
+        "message": "服务器内部错误，请联系管理员",
+        "data": None
+    }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)

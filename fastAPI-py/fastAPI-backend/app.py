@@ -7,7 +7,6 @@ from tortoise.exceptions import ValidationError
 from config import settings
 from core.Events import startup, stopping
 from core import Exception, Middleware, Router
-from api.Base import router
 
 application = FastAPI(
     debug=settings.APP_DEBUG,
@@ -23,6 +22,9 @@ application.add_event_handler("shutdown", stopping(application))
 application.add_exception_handler(HTTPException, Exception.http_exception_handler)
 application.add_exception_handler(Exception.UnicornException, Exception.unicorn_exception_handler)
 application.add_exception_handler(ValidationError, Exception.http422_exception_handler)
+# 全局异常处理器 - 必须放在最后，捕获所有未处理的异常
+import builtins
+application.add_exception_handler(builtins.Exception, Exception.global_exception_handler)
 
 # 中间件
 application.add_middleware(Middleware.BaseMiddleware)
