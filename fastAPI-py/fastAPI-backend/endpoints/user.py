@@ -1,10 +1,11 @@
 """
 用户管理相关路由
 """
+from datetime import datetime
 from fastapi import APIRouter, Security, Request
 
 from config import settings
-from core.Auth import create_access_token
+from core.Auth import create_access_token, check_permission
 from endpoints.common import write_access_log
 from models.base import User, Role
 from schemas import user
@@ -34,7 +35,7 @@ async def add_user(post: user.CreateUser):
 
     return success(msg=f"用户{post.username}创建成功!")
 
-@router.delete("", summary="删除用户")
+@router.delete("", summary="删除用户", dependencies=[Security(check_permission, scopes=["user_delete"])])
 async def user_del(req: Request, user_id: int):
     """
     删除用户
@@ -42,8 +43,8 @@ async def user_del(req: Request, user_id: int):
     :param user_id:
     :return:
     """
-    # if req.state.user_id == user_id:
-    #     return fail(msg="You son of beach, are you fucking kidding me?")
+    if req.state.user_id == user_id:
+        return fail(msg="You son of beach, are you fucking kidding me?")
     delete_result = await User.filter(pk = user_id).delete()
     if not delete_result:
         return fail(msg=f"用户{user_id}删除失败!")
@@ -69,11 +70,18 @@ async def account_login(req: Request, post: user.AccountLogin):
             return fail(msg=f"用户{post.username}密码验证失败!")
         if not get_user.user_status:
             return fail(msg=f"用户{post.username}密码验证失败!")
+
+        # 先生成Token并获取签发时间
         jwt_data = {
             "user_id": get_user.pk,
             "user_type": get_user.user_type
         }
-        jwt_token = create_access_token(data=jwt_data)
+        jwt_token, issued_at = create_access_token(data=jwt_data)
+
+        # 使用Token的签发时间更新用户最后登录时间（确保完全一致）
+        get_user.last_login_time = issued_at
+        await get_user.save()
+
         data = {"token": jwt_token, "expire_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60}
         await write_access_log(req, get_user.pk, "通过账密登录了系统")
 

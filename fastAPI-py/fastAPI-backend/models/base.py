@@ -26,6 +26,7 @@ class User(TimestampMixin):
     sex = fields.IntField(default=0, description="0 未知；1 男；2 女")
     remarks = fields.CharField(null=True, description="备注", max_length=1024 * 10)
     client_host = fields.CharField(null=True, description="访问IP", max_length=50)
+    last_login_time = fields.DatetimeField(null=True, description="最后登录时间")
 
     class Meta:
         table_description = "用户表"
