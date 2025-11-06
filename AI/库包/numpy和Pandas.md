@@ -214,6 +214,15 @@ matrix([[1, 2],
 
 
 
+| 数据类型                                                     | 类型代码                                   | 说明                                                       |
+| :----------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| bool                                                         | ?                                          | Bool                                                       |
+| int8、uint8<br />int16、uint16<br />int32、uint32<br />int64、uint64 | i1、u1<br />i2、u2<br />i4、u4<br />i8、u8 | 有符号、无符号整数类型                                     |
+| float16<br />float32<br />float64                            | f2<br />f4<br />f8                         | 半精度浮点类型<br />单精度浮点类型<br />双精度浮点类型     |
+| complex64<br />complex128                                    | c8<br />c16                                | 两个32位的浮点类型表示复数<br />两个64位的浮点类型表示复数 |
+
+
+
 - dtype： 可以指定特定的类型
 
 ```python
@@ -237,7 +246,64 @@ int64
 array([1, 2, 3])
 ```
 
+- ndarray切片和索引
 
+```python
+import numpy as np
+
+arr = np.arange(10)
+arr
+
+# 索引2到9（不包含）停止，间隔是2
+print(arr[slice(2, 9, 2)])
+print(arr[2: 9: 2])
+
+# 索引2 开始到最后
+print(arr[2:])
+
+print(arr[2: 9])
+```
+
+结果：
+
+```shell
+[2 4 6 8]
+[2 4 6 8]
+[2 3 4 5 6 7 8 9]
+[2 3 4 5 6 7 8]
+```
+
+### 常用函数
+
+- abs()： 绝对值，参数是array或number
+- ceil()： 向上取整，参数是Array或number
+- floor()： 向下取整，参数是Array或number
+- rint()： 四舍五入，参数是array或number
+- isnan()： 判断元素是否是Nan，参数是Array或number
+- multiply()： 元素相乘，参数是Array或number，如果第二个参数是number，那么将数组中的所有元素乘上这个值得到一个新的数组；如果第二个是Array，那么将对应位置的元素的元素相乘，得到一个形状相同的 数组
+- divide()： 元素相除，参数是number或Array
+- where(condition, x, y)： 三元运算符号，`x if condition else y`
+- mean()： 元素平均值
+- sum()： 所有元素的和
+- max()： 所有元素的最大值
+- min()： 所有元素的最小值
+- std()： 所有元素的标准差
+- var()： 所有元素的方差
+- argmax()： 最大值下标索引值
+- argmin()： 最小值下标索引值
+- cumsum()： 返回一个一维数组，每个元素都是之前元素的累加和
+  - 举例： `arr = np.random.randint(1, 5, (2, 3))       print(arr)       print(np.cumsum(arr))`： 结果：`[[4 3 2]
+     [4 2 2]]
+    [ 4  7  9 13 15 17]`
+- cumprod()： 返回一个一维数组，每一个元素都是之前的累乘和
+- any()： 至少有一个元素满足指定条件，返回True
+- all()： 所有元素都满足制定条件，才能返回True
+- ndarray.sort(axis = 0/-1/1)： 原地排序（修改原数组）。`axis代表排序的轴，默认值是-1，表示沿着最后一个轴进行排序；0表示按照列排序；1表示按照行排序`
+  - 轴0： 垂直方向，Y轴，行的方向。表示对列进行排序。
+  - 轴1：水平方向，X轴，列的方向。表示对行进行排序。
+- np.sort()： 返回排序之后的副本
+- unique()： 计算唯一值并返回有序结果。
+- 
 
 
 
