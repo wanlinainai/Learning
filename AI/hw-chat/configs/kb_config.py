@@ -12,3 +12,7 @@ KB_INFO = {
     "知识库名称": "知识库介绍",
     "samples": "关于本项目的ISSUES解答"
 }
+
+
+# 自定义的文本切分器名称
+TEXT_SPLITTER_NAME = "ChineseRecursiveTextSplitter"

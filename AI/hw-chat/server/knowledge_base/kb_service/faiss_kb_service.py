@@ -1,3 +1,4 @@
+from server.db.repository.knowledge_base_repository import add_kb_to_db
 from server.knowledge_base.kb_service.base import KBService
 from server.knowledge_base.utils import get_kb_path, get_doc_path
 
@@ -31,3 +32,32 @@ class FaissKBService(KBService):
         :return:
         """
         return get_doc_path(self.kb_name)
+
+
+
+async def main():
+    faissService = FaissKBService("test")
+    print(f'faiss_kb_service: {faissService}')
+
+    from server.knowledge_base.kb_service.base import KBServiceFactory
+    kb = await KBServiceFactory.get_service_by_name("test")
+
+    # 如果不存在该知识库，创建一个
+    if kb is None:
+
+
+        await add_kb_to_db(
+            kb_name="test",
+            kb_info='test',
+            vs_type='faiss',
+            embed_model="text-embedding-3-small",
+            user_id="admin"
+        )
+
+    # 添加一个”READEME.md“文档，使用await
+    await faissService.add_doc(KnowledgeFile("READEME.md", "test"))
+
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
