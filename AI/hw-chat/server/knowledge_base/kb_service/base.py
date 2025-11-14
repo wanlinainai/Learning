@@ -1,10 +1,14 @@
+import os
 from abc import ABC, abstractmethod
-from typing import Union
+from pathlib import Path
+from typing import Union, List
+
+from langchain_core.documents import Document
 
 from configs.kb_config import KB_INFO
 from configs.model_config import EMBEDDING_MODEL
 from server.db.repository.knowledge_base_repository import load_kb_from_db
-from server.knowledge_base.utils import get_kb_path, get_doc_path
+from server.knowledge_base.utils import get_kb_path, get_doc_path, KnowledgeFile
 
 
 class KBService(ABC):
@@ -23,6 +27,40 @@ class KBService(ABC):
     @abstractmethod
     def do_init(self):
         pass
+
+    @abstractmethod
+    def do_add_doc(self):
+        pass
+
+    async def add_doc(self, kb_file: KnowledgeFile, docs: List[Document] = [], **kwargs):
+        """
+        向知识库添加文件内容
+        :param kb_file:
+        :param docs:
+        :param kwargs:
+        :return:
+        """
+        if docs:
+            custom_docs = True
+            for doc in docs:
+                doc.metadata.setdefault('source', kb_file.filename)
+        else:
+
+            # 执行文档加载 --> 文档切分两个过程
+            docs = kb_file.file2text()
+            custom_docs = False
+
+        if docs:
+            for doc in docs:
+                try:
+                    source = doc.metadata.get('source', '')
+                    if os.path.isabs(source):
+                        rel_path = Path(source).relative_to(self.doc_path)
+                except Exception as e:
+                    print(f'无法将绝对路径换成相对路径：{source}, error is {e}')
+
+            # 添加到向量数据库
+            doc_infos = await self.do_add_doc(docs, **kwargs)
 
 
 class SupportedVSType:

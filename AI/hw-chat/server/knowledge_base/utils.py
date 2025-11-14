@@ -1,8 +1,9 @@
+import importlib
 import os
 from pathlib import Path
 from typing import Dict
 
-from configs.basic_config import logger
+from configs.basic_config import logger, log_verbose
 from configs.kb_config import TEXT_SPLITTER_NAME
 
 LOADER_DICT = {
@@ -37,6 +38,28 @@ def get_LoaderClass(file_extension):
         if file_extension in extensions:
             return LoaderClass
 
+def get_loader(loader_name: str, file_path: str, loader_kwargs: Dict = None):
+    """
+    根据loadername和文件路径返回文档加载器
+    :return: loader实例
+    """
+    loader_kwargs = loader_kwargs or {}
+    try:
+        # 根据 loader_name 导入相应的文档加载器
+        if loader_name in ["UnstructuredLightPipeline"]:
+            document_loader_module = importlib.import_module("document_loaders")
+        else:
+            document_loader_module = importlib.import_module("langchain.document_loaders")
+        DocumentLoader = getattr(document_loader_module, loader_name)
+    except Exception as e:
+        # 如果加载器导入失败，记录日志并将加载器设置成UnstructuredFileLoader
+        msg = f"为文件{file_path}查找加载器{loader_name}时出错：{e}"
+        logger.error(f"{e.__class__.__name__}: {msg}", exc_info=e if log_verbose else None)
+        document_loader_module = importlib.import_module('langchain_community.document_loaders')
+        DocumentLoader = getattr(document_loader_module, "UnstructuredFileLoader")
+
+    loader = DocumentLoader(file_path, **loader_kwargs)
+    return logger
 
 
 class KnowledgeFile:
@@ -81,4 +104,8 @@ class KnowledgeFile:
         if self.docs is None or refresh:
             logger.info(f"{self.document_loader_name} used for {self.filepath}")
             # 获取加载器，之后将文件内容进行加载
-            # loader = get_loader(loader_name=self.document_loader_name, file_path=self.filepath, loader_kwargs=self.loader_kwargs)
+            loader = get_loader(loader_name=self.document_loader_name, file_path=self.filepath, loader_kwargs=self.loader_kwargs)
+
+            self.docs = loader.load()
+
+
