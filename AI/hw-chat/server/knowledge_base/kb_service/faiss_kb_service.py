@@ -3,6 +3,7 @@ from typing import List, Dict
 from langchain_core.documents import Document
 
 from server.db.repository.knowledge_base_repository import add_kb_to_db
+from server.embeddings_api import embed_documents
 from server.knowledge_base.kb_service.base import KBService
 from server.knowledge_base.utils import get_kb_path, get_doc_path, KnowledgeFile
 

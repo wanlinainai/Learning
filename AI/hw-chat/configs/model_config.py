@@ -7,6 +7,9 @@ load_dotenv()
 # 选用的Embedding模型
 EMBEDDING_MODEL = "text-embedding-3-small" # 价格便宜： 输入价格：$0.02，输出：$0.02
 
+# 大语言模型
+LLM_MODELS = ["chatglm3-6b", "zhipu-api"]
+
 # 本地化模型
 MODEL_PATH = {
     # 本地化大语言模型

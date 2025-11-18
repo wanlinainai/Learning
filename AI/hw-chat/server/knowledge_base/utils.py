@@ -1,10 +1,15 @@
 import importlib
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
+
+import langchain.text_splitter
+from langchain_core.documents import Document
+from langchain_text_splitters import TextSplitter
 
 from configs.basic_config import logger, log_verbose
-from configs.kb_config import TEXT_SPLITTER_NAME
+from configs.kb_config import TEXT_SPLITTER_NAME, ZH_TITLE_ENHANCE, CHUNK_SIZE, OVERLAP_SIZE, text_splitter_dict
+from configs.model_config import LLM_MODELS
 
 LOADER_DICT = {
     "UnstructuredMarkdownLoader": ['.md'],
@@ -108,4 +113,113 @@ class KnowledgeFile:
 
             self.docs = loader.load()
 
+        return self.docs
 
+
+    def make_text_splitter(
+            self,
+            splitter_name: str = TEXT_SPLITTER_NAME,
+            chunk_size: int = CHUNK_SIZE,
+            chunk_overlap: int = OVERLAP_SIZE,
+            llm_model: str = LLM_MODELS[0]
+    ):
+        """
+        获取相应的分词器
+        :param splitter_name: 分词器名称
+        :param chunk_size: 分块大小
+        :param chunk_overlap: 重叠区域大小
+        :param llm_model: 大语言模型
+        :return:
+        """
+        splitter_name = splitter_name or "SpacyTextSplitter"
+        try:
+            # 如果是Markdown格式分词器，需要按照headers_to_split_on特殊处理
+            if splitter_name == 'MarkdownHeaderTextSplitter':
+                headers_to_split_on = text_splitter_dict[splitter_name]['headers_to_split_on']
+                text_splitter = langchain.text_splitter.MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+            else:
+                try:
+                    # 首先使用用户自定义的文本加载器
+                    text_splitter_module = importlib.import_module('text_splitter')
+                    TextSplitter = getattr(text_splitter_module, splitter_name)
+                except:
+                    # 如果没有，使用Langchain的分词模块
+                    text_splitter_module = importlib.import_module('langchain.text_splitter')
+                    TextSplitter = getattr(text_splitter_module, splitter_name)
+
+                if text_splitter_dict[splitter_name]['source'] == 'tiktoken':
+                    try:
+                        text_splitter = TextSplitter.from_tiktoken_encoder(
+                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
+                            pipeline="zh_core_web_sm",
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap
+                        )
+                    except:
+                        # 失败的话使用纯tiktoken编码器，不再依赖spacy中文处理能力
+                        text_splitter = TextSplitter.from_tiktoken_encoder(
+                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
+                            chunk_size = chunk_size,
+                            chunk_overlap = chunk_overlap
+                        )
+                elif text_splitter_dict[splitter_name]['source'] == 'huggingface':
+                    pass
+
+
+        except Exception as e:
+            print(e)
+
+
+    def docs2texts(
+            self,
+            docs: List[Document] = None,
+            zh_title_enhance: bool = True,
+            refresh: bool = False,
+            chunk_size: int = CHUNK_SIZE,
+            chunk_overlap: int = OVERLAP_SIZE,
+            text_splitter: TextSplitter = None,
+    ):
+
+        docs = docs or self.file2docs(refresh=refresh)
+        if not docs:
+            return []
+        if self.ext not in ['.csv']:
+            if text_splitter is None:
+                text_splitter = make_text_splitter(
+                    splitter_name = self.text_splitter_name,
+                    chunk_size= chunk_size,
+                    chunk_overlap = chunk_overlap
+                )
+            if self.text_splitter_name == 'MarkdownHeaderTextSplitter':
+                docs = text_splitter.split_text(docs[0].page_content)
+            else:
+                docs = text_splitter.split_documents(docs)
+
+    def file2text(self,
+                  zh_title_enhance: bool = ZH_TITLE_ENHANCE,
+                  refresh: bool = False,
+                  chunk_size: int = CHUNK_SIZE,
+                  chunk_overlap: int = OVERLAP_SIZE,
+                  text_splitter: TextSplitter = None
+                  ):
+        """
+        文件转文本
+        :param zh_title_enhance: bool 中文增强
+        :param refresh:
+        :param chunk_size:
+        :param chunk_overlap:
+        :param text_splitter:
+        :return:
+        """
+        if self.splited_docs is None or refresh:
+            docs = self.file2docs()
+            self.splited_docs = self.docs2texts(
+                docs = docs,
+                zh_title_enhance = zh_title_enhance,
+                refresh = refresh,
+                chunk_size = chunk_size,
+                chunk_overlap = chunk_overlap,
+                text_splitter = text_splitter
+            )
+
+        return self.splited_docs

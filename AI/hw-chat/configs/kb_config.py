@@ -16,3 +16,37 @@ KB_INFO = {
 
 # 自定义的文本切分器名称
 TEXT_SPLITTER_NAME = "ChineseRecursiveTextSplitter"
+
+
+# 是否开启中文标题增强
+ZH_TITLE_ENHANCE = True
+
+CHUNK_SIZE = 250
+
+OVERLAP_SIZE = 50
+
+
+# 分词器配置项
+text_splitter_dict = {
+    # Markdown文档的处理
+    "MarkdownHeaderTextSplitter": {
+        "header_to_split_on": [
+            ('#', 'head1'),
+            ('##', 'head2'),
+            ('###', 'head3'),
+            ('####', 'head4'),
+        ]
+    },
+    "ChineseRecursiveTextSplitter": {
+        "source": "huggingface",
+        "tokenizer_name_or_path": ""
+    },
+    "SpacyTextSplitter": {
+        "source": "huggingface",
+        "tokenizer_name_or_path": "gpt3"
+    },
+    "RecursiveCharacterTextSplitter": {
+        "source": "tiktoken",
+        "tokenizer_name_or_path": "cl100k_base"
+    }
+}
