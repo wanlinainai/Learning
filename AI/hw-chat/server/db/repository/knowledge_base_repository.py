@@ -28,7 +28,7 @@ async def add_kb_to_db(session, kb_name, kb_info, vs_type, embed_model, user_id)
         .where(KnowledgeBaseModel.kb_name.ilike(kb_name))
     )
 
-    kb = kb.scalar().first()
+    kb = kb.scalars().first()
 
     if not kb:
         # 创建新的数据库实例

@@ -10,6 +10,8 @@ from langchain_text_splitters import TextSplitter
 from configs.basic_config import logger, log_verbose
 from configs.kb_config import TEXT_SPLITTER_NAME, ZH_TITLE_ENHANCE, CHUNK_SIZE, OVERLAP_SIZE, text_splitter_dict
 from configs.model_config import LLM_MODELS
+from server.utils import get_model_worker_config
+from text_splitter.zh_title_enhance import func_zh_title_enhance
 
 LOADER_DICT = {
     "UnstructuredMarkdownLoader": ['.md'],
@@ -66,6 +68,96 @@ def get_loader(loader_name: str, file_path: str, loader_kwargs: Dict = None):
     loader = DocumentLoader(file_path, **loader_kwargs)
     return logger
 
+def make_text_splitter(
+            splitter_name: str = TEXT_SPLITTER_NAME,
+            chunk_size: int = CHUNK_SIZE,
+            chunk_overlap: int = OVERLAP_SIZE,
+            llm_model: str = LLM_MODELS[0]
+    ):
+        """
+        获取相应的分词器
+        :param splitter_name: 分词器名称
+        :param chunk_size: 分块大小
+        :param chunk_overlap: 重叠区域大小
+        :param llm_model: 大语言模型
+        :return:
+        """
+        splitter_name = splitter_name or "SpacyTextSplitter"
+        try:
+            # 如果是Markdown格式分词器，需要按照headers_to_split_on特殊处理
+            if splitter_name == 'MarkdownHeaderTextSplitter':
+                headers_to_split_on = text_splitter_dict[splitter_name]['headers_to_split_on']
+                text_splitter = langchain.text_splitter.MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+            else:
+                try:
+                    # 首先使用用户自定义的文本加载器
+                    text_splitter_module = importlib.import_module('text_splitter')
+                    TextSplitter = getattr(text_splitter_module, splitter_name)
+                except:
+                    # 如果没有，使用Langchain的分词模块
+                    text_splitter_module = importlib.import_module('langchain.text_splitter')
+                    TextSplitter = getattr(text_splitter_module, splitter_name)
+
+                if text_splitter_dict[splitter_name]['source'] == 'tiktoken':
+                    try:
+                        text_splitter = TextSplitter.from_tiktoken_encoder(
+                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
+                            pipeline="zh_core_web_sm",
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap
+                        )
+                    except:
+                        # 失败的话使用纯tiktoken编码器，不再依赖spacy中文处理能力
+                        text_splitter = TextSplitter.from_tiktoken_encoder(
+                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
+                            chunk_size = chunk_size,
+                            chunk_overlap = chunk_overlap
+                        )
+                elif text_splitter_dict[splitter_name]['source'] == 'huggingface':
+                    if text_splitter_dict[splitter_name]["tokenizer_name_or_path"] == '':
+                        config = get_model_worker_config(llm_model)
+                        text_splitter_dict[splitter_name]['tokenizer_name_or_path'] = config.get('model_path')
+
+                    if text_splitter_dict[splitter_name]['tokenizer_name_or_path'] == 'gpt2':
+                        from transformers import GPT2TokenizerFast
+                        from langchain.text_splitter import CharacterTextSplitter
+                        tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+                    else:
+                        from transformers import AutoTokenizer
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
+                            trust_remote_code=True
+                        )
+                    text_splitter = TextSplitter.from_huggingface_tokenizer(
+                        tokenizer=tokenizer,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap
+                    )
+                else:
+                    try:
+                        text_splitter=  TextSplitter(
+                            pipeline="zh_core_web_sm",
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap
+                        )
+                    except:
+                        text_splitter = TextSplitter(
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap
+                        )
+
+
+        except Exception as e:
+            print(e)
+            text_splitter_module = importlib.import_module('langchain.text_splitter')
+            TextSplitter = getattr(text_splitter_module, 'RecursiveCharacterTextSplitter')
+            text_splitter = TextSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+
+        return text_splitter
+
 
 class KnowledgeFile:
     def __init__(
@@ -116,60 +208,6 @@ class KnowledgeFile:
         return self.docs
 
 
-    def make_text_splitter(
-            self,
-            splitter_name: str = TEXT_SPLITTER_NAME,
-            chunk_size: int = CHUNK_SIZE,
-            chunk_overlap: int = OVERLAP_SIZE,
-            llm_model: str = LLM_MODELS[0]
-    ):
-        """
-        获取相应的分词器
-        :param splitter_name: 分词器名称
-        :param chunk_size: 分块大小
-        :param chunk_overlap: 重叠区域大小
-        :param llm_model: 大语言模型
-        :return:
-        """
-        splitter_name = splitter_name or "SpacyTextSplitter"
-        try:
-            # 如果是Markdown格式分词器，需要按照headers_to_split_on特殊处理
-            if splitter_name == 'MarkdownHeaderTextSplitter':
-                headers_to_split_on = text_splitter_dict[splitter_name]['headers_to_split_on']
-                text_splitter = langchain.text_splitter.MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-            else:
-                try:
-                    # 首先使用用户自定义的文本加载器
-                    text_splitter_module = importlib.import_module('text_splitter')
-                    TextSplitter = getattr(text_splitter_module, splitter_name)
-                except:
-                    # 如果没有，使用Langchain的分词模块
-                    text_splitter_module = importlib.import_module('langchain.text_splitter')
-                    TextSplitter = getattr(text_splitter_module, splitter_name)
-
-                if text_splitter_dict[splitter_name]['source'] == 'tiktoken':
-                    try:
-                        text_splitter = TextSplitter.from_tiktoken_encoder(
-                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
-                            pipeline="zh_core_web_sm",
-                            chunk_size=chunk_size,
-                            chunk_overlap=chunk_overlap
-                        )
-                    except:
-                        # 失败的话使用纯tiktoken编码器，不再依赖spacy中文处理能力
-                        text_splitter = TextSplitter.from_tiktoken_encoder(
-                            encoding_name=text_splitter_dict[splitter_name]['tokenizer_name_or_path'],
-                            chunk_size = chunk_size,
-                            chunk_overlap = chunk_overlap
-                        )
-                elif text_splitter_dict[splitter_name]['source'] == 'huggingface':
-                    pass
-
-
-        except Exception as e:
-            print(e)
-
-
     def docs2texts(
             self,
             docs: List[Document] = None,
@@ -194,6 +232,14 @@ class KnowledgeFile:
                 docs = text_splitter.split_text(docs[0].page_content)
             else:
                 docs = text_splitter.split_documents(docs)
+        if not docs:
+            return []
+
+        print(f'文档切割案例:{docs[0]}')
+        if zh_title_enhance:
+            docs = func_zh_title_enhance(docs)
+        self.splited_docs = docs
+        return self.splited_docs
 
     def file2text(self,
                   zh_title_enhance: bool = ZH_TITLE_ENHANCE,

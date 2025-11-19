@@ -57,7 +57,7 @@ async def wiki_main():
 async def sequential_execution():
 
     await main()
-    await wiki_main()
+    # await wiki_main()
 
 async def test_query():
     faissService = FaissKBService("private")

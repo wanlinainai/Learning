@@ -140,7 +140,7 @@ class UnstructuredLightPipeline:
                 TextColumn('[progress.description]{task.description}'),
                 transient=False
             ) as progress:
-                progress.add_task(task_call, description=task_description)
+                progress.add_task(description=task_description, total=None)
                 ret = task_call()
         else:
             print(task_description)
