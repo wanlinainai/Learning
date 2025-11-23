@@ -1,13 +1,17 @@
 import os
+import numpy as np
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Union, List
 
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 
-from configs.kb_config import KB_INFO
+from configs.kb_config import KB_INFO, VECTOR_SEARCH_TOP_K, SCORE_THRESHOLD
 from configs.model_config import EMBEDDING_MODEL
 from server.db.repository.knowledge_base_repository import load_kb_from_db
+from server.db.repository.knowledge_file_repository import do_add_to_db
+from server.embeddings_api import embed_texts, aembed_texts
 from server.knowledge_base.utils import get_kb_path, get_doc_path, KnowledgeFile
 
 
@@ -31,6 +35,19 @@ class KBService(ABC):
     @abstractmethod
     def do_add_doc(self):
         pass
+
+    async def search_docs(
+            self,
+            query: str,
+            top_k: int = VECTOR_SEARCH_TOP_K,
+            score_threshold: float = SCORE_THRESHOLD
+    ) -> List[Document]:
+        """
+        检索文档
+        :return:
+        """
+        docs = await self.do_search(query, top_k, score_threshold)
+        return docs
 
     async def add_doc(self, kb_file: KnowledgeFile, docs: List[Document] = [], **kwargs):
         """
@@ -56,11 +73,21 @@ class KBService(ABC):
                     source = doc.metadata.get('source', '')
                     if os.path.isabs(source):
                         rel_path = Path(source).relative_to(self.doc_path)
+                        doc.metadata['source'] = str(rel_path.as_posix().strip('/'))
                 except Exception as e:
                     print(f'无法将绝对路径换成相对路径：{source}, error is {e}')
 
             # 添加到向量数据库
             doc_infos = await self.do_add_doc(docs, **kwargs)
+            status = await do_add_to_db(
+                kb_file,
+                custom_docs=custom_docs,
+                docs_count= len(docs),
+                doc_infos = doc_infos
+            )
+        else:
+            status = False
+        return status
 
 
 class SupportedVSType:
@@ -113,3 +140,45 @@ class KBServiceFactory:
         if _ is None:
             return None
         return KBServiceFactory.get_service(kb_name, vs_type, embed_model=embed_model)
+
+def normalize(embeddings: List[List[float]]) -> np.ndarray:
+    '''
+    向量归一化，通过归一化，余弦相似度变成更加简单的点积。消除了对不同输入长度文本差异化
+    :param embeddings:
+    :return:
+    '''
+    norm = np.linalg.norm(embeddings, axis=1)
+    norm = np.reshape(norm, (norm.shape[0], 1))
+    norm = np.tile(norm, (1, len(embeddings[0])))
+    return np.divide(embeddings, norm)
+
+class EmbeddingsFunAdapter(Embeddings):
+    def __init__(self, embed_model: str = EMBEDDING_MODEL):
+        self.embed_model = embed_model
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        embeddings = embed_texts(texts=texts, embed_model=self.embed_model, to_query=False).data
+        return normalize(embeddings).tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        embeddings = embed_texts(texts=[text], embed_model=self.embed_model, to_query=True).data
+        query_embed = embeddings[0]
+        query_embed_2d = np.reshape(query_embed, (1, -1))
+        normalized_query_embed = normalize(query_embed_2d)
+        return normalized_query_embed[0].tolist() # 结果转成一维数组之后返回
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        embeddings = (await aembed_texts(texts=texts, embed_model=self.embed_model, to_query=False)).data
+        return normalize(embeddings).tolist()
+
+    async def aembed_query(self, text: str) -> List[float]:
+        '''
+        标准优化手段进行文本向量匹配
+        :param text:
+        :return:
+        '''
+        embeddings = (await aembed_texts(texts=[text], embed_model=self.embed_model, to_query=True)).data
+        query_embed = embeddings[0]
+        query_embed_2d = np.reshape(query_embed, (1, -1)) # 转成二维数组
+        normalized_query_embed = normalize(query_embed_2d)
+        return normalized_query_embed[0].tolist() # numpy数组准成Python数组

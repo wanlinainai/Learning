@@ -1,7 +1,10 @@
 from typing import Dict, List
 
 from langchain_core.documents import Document
+from sqlalchemy.util import await_only
+from starlette.concurrency import run_in_threadpool
 
+from configs.basic_config import logger
 from configs.model_config import EMBEDDING_MODEL
 from server.utils import BaseResponse, list_embed_models, list_online_embed_models
 
@@ -21,6 +24,33 @@ def embed_texts(texts: List[str],
             return BaseResponse(data=[])
     except Exception as e:
         return BaseResponse(code=500, msg=f"embedding error: {e}")
+
+async def aembed_texts(
+        texts: List[str],
+        embed_model: str = EMBEDDING_MODEL,
+        to_query: bool = False
+) -> BaseResponse:
+    '''
+    对文本进行向量化，返回数据格式：BaseResponse
+    :param texts: 文本内容
+    :param embed_model: 调用模型
+    :param to_query:
+    :return:
+    '''
+    try:
+        if embed_model in list_embed_models(): # 本地大模型
+            pass
+        if embed_model in list_online_embed_models(): # 在线大模型
+            return await run_in_threadpool(
+                embed_texts,
+                texts=texts,
+                embed_model=embed_model,
+                to_query=to_query
+            )
+    except Exception as e:
+        logger.error(e)
+        return BaseResponse(code=500, msg=f"embedding error: {e}")
+
 
 
 def embed_documents(

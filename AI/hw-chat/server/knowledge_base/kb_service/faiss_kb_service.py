@@ -1,10 +1,11 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 from langchain_core.documents import Document
 
+from configs.kb_config import SCORE_THRESHOLD
 from server.db.repository.knowledge_base_repository import add_kb_to_db
 from server.embeddings_api import embed_documents
-from server.knowledge_base.kb_service.base import KBService
+from server.knowledge_base.kb_service.base import KBService, EmbeddingsFunAdapter
 from server.knowledge_base.utils import get_kb_path, get_doc_path, KnowledgeFile
 
 
@@ -45,6 +46,32 @@ class FaissKBService(KBService):
         :return:
         """
         return embed_documents(docs=docs, embed_model=self.embed_model, to_query=False)
+
+    async def do_search(
+            self,
+            query: str,
+            top_k: int,
+            score_threshold: float = SCORE_THRESHOLD
+    ) -> List[Tuple[Document, float]]:
+        '''
+        查询最相似的文档
+        :param query:  查询内容
+        :param top_k: 最相似文档的个数
+        :param score_threshold: 分数阈值
+        :return:
+        '''
+        # 实例化 Embedding 实例，将用户的query转成 Embedding 之后查询
+        embed_func = EmbeddingsFunAdapter(self.embed_model)
+        # 获取问题的 Embedding
+        embeddings = await embed_func.aembed_query(query)
+
+        vector_store = await self.load_vector_store()
+
+        with vector_store.acquire() as vs:
+            docs = vs.similarity_search_with_score_by_vector(embeddings, k=top_k, score_threshold=score_threshold)
+        return docs
+
+
 
     async def do_add_doc(self,
                          docs: List[Document],

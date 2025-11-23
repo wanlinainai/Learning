@@ -23,7 +23,10 @@ SUPPORTED_EXTS = [ext for sublist in LOADER_DICT.values() for ext in sublist ]
 
 
 def get_kb_path(knowledge_base_name: str):
-    return os.path.join(os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge_base"), knowledge_base_name)
+    kb_root_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'knowledge_base')
+    if not os.path.exists(kb_root_path):
+        os.mkdir(kb_root_path)
+    return os.path.join(kb_root_path, knowledge_base_name)
 
 def get_doc_path(knowledge_base_name: str):
     return os.path.join(get_kb_path(knowledge_base_name), 'content')
@@ -269,3 +272,9 @@ class KnowledgeFile:
             )
 
         return self.splited_docs
+
+    def get_mtime(self):
+        return os.path.getmtime(self.filepath)
+
+    def get_size(self):
+        return os.path.getsize(self.filepath)

@@ -26,7 +26,7 @@ async def process_and_add_document(file_path, faiss_service):
 
     # 创建 KnowledgeFile 对象
     # Path Class ： 将路径包装成一个对象，其中可以直接使用各种方法：p.exists()  p.is_dir()  p.is_file()  p.parent  p.name  p.suffix
-    kb_file = KnowledgeFile(Path(file_path), "private")
+    kb_file = KnowledgeFile(Path(file_path).name, "private")
 
     # 添加文档到faiss
     added_docs_info = await faiss_service.add_doc(kb_file, docs)

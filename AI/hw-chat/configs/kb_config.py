@@ -13,6 +13,11 @@ KB_INFO = {
     "samples": "关于本项目的ISSUES解答"
 }
 
+# 知识库匹配向量数量
+VECTOR_SEARCH_TOP_K = 3
+
+# 知识库匹配的距离阈值，范围是在0-1之间，score越小，距离越小相关性越高
+SCORE_THRESHOLD = 1.0
 
 # 自定义的文本切分器名称
 TEXT_SPLITTER_NAME = "ChineseRecursiveTextSplitter"

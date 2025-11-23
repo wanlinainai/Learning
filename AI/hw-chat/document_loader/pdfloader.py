@@ -53,7 +53,7 @@ class UnstructuredLightPipeline:
                 )
 
         docs = self.invoke_pipeline_step(
-            lambda: self.split_text(documents, chunk_size=20, overlap=50),
+            lambda: self.split_text(documents, chunk_size=200, overlap=50),
             'Splitting text...',
             local
         )
