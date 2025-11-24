@@ -5,8 +5,12 @@ import multiprocessing as mp
 from multiprocessing import Process
 from typing import Tuple
 
+from fastapi import FastAPI, Body
+from matplotlib.style.core import available
+
 from configs.basic_config import logger, LOG_PATH
 from configs.model_config import LLM_MODELS
+from configs.server_config import FSCHAT_MODEL_WORKERS
 
 
 def parse_args() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
@@ -46,20 +50,86 @@ def parse_args() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     args = parser.parse_args()
     return args, parser
 
+def create_controller_app(
+        dispatch_method: str,
+        log_level: str = 'INFO'
+) -> FastAPI:
+    """
+    :param dispatch_method: 调度方法，如何将请求分配给不同的模型工作器。
+    :param log_level:日志级别
+    :return:
+    """
+    import fastchat.constants
+    fastchat.constants.LOGDIR = LOG_PATH
+    from fastchat.serve.controller import app, Controller, logger
+    logger.setLevel(log_level)
+
+    controller = Controller(dispatch_method)
+    sys.modules['fastchat.serve.controller'].controller = controller
+
+    app.title = 'FastChat Controller'
+    app._controller = controller
+    return app
+
+
+def _set_app_event(app: FastAPI, started_event: mp.Event = None):
+    @app.on_event('startup')
+    async def on_startup():
+        if started_event is not None:
+            started_event.set()
+
+
 def run_controller(log_level: str = "INFO", started_event: mp.Event = None):
     """
     启动fastChat 的 controller，协调多个模型的工作进程（Model Worker）
     :return:
     """
-    # todo : Need todo
-    pass
+    from server.utils import set_httpx_config
+    set_httpx_config()
+
+    app = create_controller_app(
+        dispatch_method=FSCHAT_MODEL_WORKERS.get('dispatch_method'),
+        log_level=log_level,
+    )
+
+    _set_app_event(app, started_event)
+
+    @app.post('/release_worker')
+    def release_worker(
+            model_name: str = Body(..., description='释放模型的名称', samples=['chatglm-6b']),
+            new_model_name: str = Body(None, description='释放之后加载的模型名称'),
+            keep_origin: bool = Body(None, description="不释放模型，加载新的模型")
+    ):
+        available_models = app._controller.list_models()
+        if new_model_name in available_models:
+            msg = f'切换的模型{new_model_name}已经存在'
+            logger.info(msg)
+            return {"code": 500, 'msg': msg}
+
+        if model_name not in available_models:
+            msg = f'释放的模型{model_name}不存在'
+            logger.error(msg)
+            return {"code": 500, 'msg': msg}
+
+        worker_address = app._controller.get_worker_address(model_name)
+        if not worker_address:
+            msg = f'can not find model_worker address of {model_name}'
+            logger.error(msg)
+            return {'code': 500, 'msg': msg}
+        with get_httpx_client() as client:
+            r = client.post(worker_address + '/release',
+                            json={'new_model_name': new_model_name, 'keep_origin': keep_origin})
+            if r.status_code != 200:
+                msg = f'failed to release model: {model_name}'
+                logger.error(msg)
+                return {'code': 500, 'msg': msg}
 
 def run_openai_api():
     """
     FastChat启动 OpenAI API
     :return:
     """
-    # todo : Need todo 
+    # todo : Need todo
     pass
 
 def start_main_server():

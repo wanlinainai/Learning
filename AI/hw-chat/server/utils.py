@@ -1,12 +1,14 @@
 import os
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Union
 
+import httpx
 import pydantic
+from mpmath import isint
 from pydantic import BaseModel
 
 from configs.basic_config import logger, log_verbose
-from configs.model_config import MODEL_PATH, ONLINE_LLM_MODEL
-from configs.server_config import FSCHAT_MODEL_WORKERS
+from configs.model_config import MODEL_PATH, ONLINE_LLM_MODEL, LLM_MODELS
+from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API
 from server import model_workers
 
 
@@ -22,6 +24,110 @@ class BaseResponse(BaseModel):
                 "msg": "success"
             }
         }
+
+def fschat_controller_address() -> str:
+    host = FSCHAT_CONTROLLER['host']
+    if host == '0.0.0.0':
+        host = '127.0.0.1'
+    port = FSCHAT_CONTROLLER['port']
+    return f'http://{host}:{port}'
+
+def fschat_model_worker_address(model_name: str = LLM_MODELS[0]) -> str:
+    if model := get_model_worker_config(model_name):
+        host = model['host']
+        if host == '0.0.0.0':
+            host = '127.0.0.1'
+        port = model['port']
+        return f'http://{host}: {port}'
+    return ''
+
+def fschat_openai_api_address() -> str:
+    '''
+    获取OpenAI的 接口访问地址
+    :return:
+    '''
+    host = FSCHAT_OPENAI_API['host']
+    if host == '0.0.0.0':
+        host = '127.0.0.1'
+    port = FSCHAT_OPENAI_API['port']
+    return f'http://{host}:{port}/v1'
+
+def set_httpx_config(
+        timeout: float = HTTPX_DEFAULT_TIMEOUT,
+        proxy: Union[str, Dict] = None
+):
+    '''
+    设置默认httpx超时时间和代理服务
+    :param timeout: 超时时间，单位秒
+    :param proxy: 代理
+    :return:
+    '''
+    import httpx
+    import os
+
+    httpx._config.DEFAULT_TIMEOUT_CONFIG.connect = timeout
+    httpx._config.DEFAULT_TIMEOUT_CONFIG.read = timeout
+    httpx._config.DEFAULT_TIMEOUT_CONFIG.write = timeout
+
+    # 在进程范围中设置系统代理
+    proxies = {}
+    if isinstance(proxy, str):
+        for n in ['http', 'https', 'all']:
+            proxies[n + '_proxy'] = proxy
+    elif isinstance(proxy, dict):
+        for n in ['http', 'https', 'all']:
+            if p := proxy.get(n):
+                proxies[n + '_proxy'] = p
+            elif p:= proxy.get(n + '_proxy'):
+                proxies[n + '_proxy'] = p
+
+    for k, v in proxies.items():
+        os.environ[k] = v
+
+    no_proxy = [x.strip() for x in os.environ.get('no_proxy', '').split(',') if x.strip()]
+    no_proxy += [
+        'http://127.0.0.1',
+        'http://localhost'
+    ]
+
+    # 不使用代理使用部署的FastChat服务
+    for x in [
+        fschat_controller_address(),
+        fschat_model_worker_address(),
+        fschat_openai_api_address()
+    ]:
+        host = ':'.join(x.split(':')[:2])
+        if host not in no_proxy:
+            no_proxy.append(host)
+        os.environ["NO_PROXY"] = ','.join(no_proxy)
+
+    # 修改默认的getproxies函数
+    def _get_proxies():
+        return proxies
+    import urllib.request
+    urllib.request.getproxies = _get_proxies()
+
+
+def get_httpx_client(
+        use_async: bool = False,
+        proxies: Union[str, Dict] = None,
+        timeout: float = HTTPX_DEFAULT_TIMEOUT,
+        **kwargs,
+) -> Union[httpx.Client, httpx.AsyncClient]:
+    default_proxies = {
+        'all://127.0.0.1': None,
+        'all://localhost': None,
+    }
+
+    for x in [
+        fschat_controller_address(),
+        fschat_model_worker_address(),
+        fschat_openai_api_address(),
+    ]:
+        host = ':'.join(x.split(':')[:2])
+        default_proxies.update({host: None})
+
+
 
 def list_embed_models() -> List[str]:
     """
