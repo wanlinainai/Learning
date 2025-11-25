@@ -13,7 +13,8 @@ from fastchat.utils import build_logger
 
 from configs.basic_config import logger, LOG_PATH
 from configs.model_config import LLM_MODELS
-from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API
+from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API, \
+    API_SERVER
 from server.utils import get_httpx_client, fschat_controller_address, set_httpx_config, get_model_worker_config
 
 
@@ -222,6 +223,28 @@ def create_model_worker_app(log_level: str = 'INFO', **kwargs) -> FastAPI:
     parser = argparse.ArgumentParser()
     args = parser.parse_args([])
 
+    for k, v in kwargs.items():
+        setattr(args, k, v)
+    if worker_class :=kwargs.get('langchain_model'):
+        worker = ''
+    elif worker_class := kwargs.get('worker_class'):
+        from fastchat.serve.base_model_worker import app
+        worker = worker_class(
+            model_names = args.model_names,
+            controller_addr = args.controller_address,
+            worker_addr = args.worker_address,
+        )
+        # Python的logging模块中获取logger之后通过setLevel设置日志等级
+        sys.modules['fastchat.serve.base_model_worker'].logger.setLevel(log_level)
+
+    # 本地环境
+    else:
+        pass
+
+    app.title = f'FastChat LLM Server ({args.model_name[0]})'
+    app._worker = worker
+    return app
+
 
 def run_model_worker(
         model_name: str = LLM_MODELS[0],
@@ -264,9 +287,19 @@ def run_model_worker(
 
     uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
 
+def run_api_server(started_event: mp.Event = None):
+    """
+    运行API 服务
+    """
+    app = create_app()
+    _set_app_event(app, started_event)
 
+    host = API_SERVER["host"]
+    port = API_SERVER["port"]
 
-def start_main_server():
+    uvicorn.run(app, host=host, port=port)
+
+async def start_main_server():
     import time
     import signal
     def handler(signalname):
@@ -335,6 +368,15 @@ def start_main_server():
             )
             processes['online_api'][model_name] = process
     api_started = manager.Event()
+
+    process = Process(
+        target=run_api_server,
+        name=f'API server',
+        kwargs=dict(started_event=api_started),
+        daemon=True
+    )
+
+    processes['api'] = process
 
     pass
 

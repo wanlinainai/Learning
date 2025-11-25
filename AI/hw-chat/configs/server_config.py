@@ -37,3 +37,8 @@ FSCHAT_OPENAI_API = {
     'host': DEFAULT_BIND_HOST,
     "port": 20000
 }
+
+API_SERVER = {
+    'host':DEFAULT_BIND_HOST,
+    'port':6006
+}
