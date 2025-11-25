@@ -127,6 +127,36 @@ def get_httpx_client(
         host = ':'.join(x.split(':')[:2])
         default_proxies.update({host: None})
 
+    default_proxies.update({
+        "http://": (os.environ.get('http_proxy')
+                    if os.environ.get('http_proxy') and len(os.environ.get('http_proxy').strip())
+                    else None),
+        "https://": (os.environ.get('https_proxy')
+                     if os.environ.get("https_proxy") and len(os.environ.get('https_proxy').strip())
+                     else None),
+        "all://": (os.environ.get('all_proxy')
+                   if os.environ.get('all_proxy') and len(os.environ.get('all_proxy').strip())
+                   else None)
+    })
+
+    for host in os.environ.get('no_proxy', '').split(','):
+        if host := host.strip():
+            default_proxies.update({'all://' + host: None})
+
+    if isinstance(proxies, str):
+        proxies = {'all://': proxies}
+    if isinstance(proxies, dict):
+        default_proxies.update(proxies)
+
+    kwargs.update(timeout=timeout, proxies=default_proxies)
+
+    if log_verbose:
+        logger.info(f'{get_httpx_client.__class__.__name__}: kwargs={kwargs}')
+
+    if use_async:
+        return httpx.AsyncClient(**kwargs)
+    else:
+        return httpx.Client(**kwargs)
 
 
 def list_embed_models() -> List[str]:
@@ -168,8 +198,8 @@ def get_model_worker_config(model_name: str = None) -> dict:
     """
     # 模型配置信息添加到dict中，update方法如果dict存在就更新，否则新增内容
     config = FSCHAT_MODEL_WORKERS.get('default', {}).copy()
-    config.update(ONLINE_LLM_MODEL.get(model_name), {}).copy()
-    config.update(FSCHAT_MODEL_WORKERS.get(model_name), {}).copy()
+    config.update(ONLINE_LLM_MODEL.get(model_name, {}).copy())
+    config.update(FSCHAT_MODEL_WORKERS.get(model_name, {}).copy())
 
     # 如果传入的模型是本地部署的
     if model_name in MODEL_PATH['local_model']:

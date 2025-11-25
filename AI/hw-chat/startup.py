@@ -2,15 +2,19 @@ import argparse
 import asyncio
 import sys
 import multiprocessing as mp
+import time
 from multiprocessing import Process
-from typing import Tuple
+from typing import Tuple, List, Dict
 
+import uvicorn
 from fastapi import FastAPI, Body
-from matplotlib.style.core import available
+from fastchat.serve.openai_api_server import app_settings
+from fastchat.utils import build_logger
 
 from configs.basic_config import logger, LOG_PATH
 from configs.model_config import LLM_MODELS
-from configs.server_config import FSCHAT_MODEL_WORKERS
+from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API
+from server.utils import get_httpx_client, fschat_controller_address, set_httpx_config, get_model_worker_config
 
 
 def parse_args() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
@@ -124,13 +128,143 @@ def run_controller(log_level: str = "INFO", started_event: mp.Event = None):
                 logger.error(msg)
                 return {'code': 500, 'msg': msg}
 
-def run_openai_api():
+        if new_model_name:
+            timer = HTTPX_DEFAULT_TIMEOUT
+            while timer > 0:
+                models = app._controller.list_models()
+                if new_model_name in models:
+                    break
+                time.sleep(1)
+                timer -= 1
+            if timer > 0:
+                msg = f'success change model from {model_name} to {new_model_name}'
+                logger.info(msg)
+                return {"code": 200, "msg": msg}
+            else:
+                msg = f'failed to change model from {model_name} to {new_model_name}'
+                logger.error(msg)
+                return {'code': 500, 'msg': msg}
+        else:
+            msg = f'success to release model: {model_name}'
+            logger.info(msg)
+            return {'code': 200, "msg": msg}
+
+    host = FSCHAT_CONTROLLER['host']
+    port = FSCHAT_CONTROLLER['port']
+
+    # 避免fastchat吞掉报错信息日志
+    if log_level == 'ERROR':
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+
+    uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
+
+def create_openai_api_app(
+        controller_address: str,
+        api_keys: List = [],
+        log_level: str = 'INFO'
+) -> FastAPI:
+    """
+    创建openai服务
+    :param controller_address:
+    :param api_keys:
+    :param log_level:
+    :return:
+    """
+    import fastchat.constants
+    fastchat.constants.LOGDIR = LOG_PATH
+    logger = build_logger('openai-api', "openai-api.log")
+    logger.setLevel(log_level)
+
+    from fastchat.serve.openai_api_server import app, CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origins=['*'],
+        allow_mehtods=['*'],
+        allow_headers=['*']
+    )
+
+    sys.modules['fastchat.serve.openai_api_server'].logger = logger
+    app_settings.controller_address = controller_address
+    app_settings.api_keys = api_keys
+
+    app.title = 'FastChat Controller'
+    return app
+
+def run_openai_api(log_level:str = 'INFO', started_event: mp.Event = None):
     """
     FastChat启动 OpenAI API
     :return:
     """
-    # todo : Need todo
-    pass
+    set_httpx_config()
+
+    controller_addr = fschat_controller_address()
+    app = create_openai_api_app(controller_addr, log_level=log_level)
+    _set_app_event(app, started_event)
+
+    host = FSCHAT_OPENAI_API['host']
+    port = FSCHAT_OPENAI_API['port']
+
+    if log_level == 'ERROR':
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+    uvicorn.run(app, host=host, port=port)
+
+def create_model_worker_app(log_level: str = 'INFO', **kwargs) -> FastAPI:
+    '''
+    创建模型worker FastAPI服务
+    :param log_level: 日志等级
+    :param kwargs: 包含model_name、controller_address、worker_address、model_path
+    :return:
+    '''
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args([])
+
+
+def run_model_worker(
+        model_name: str = LLM_MODELS[0],
+        controller_address: str = "",
+        log_level: str = 'INFO',
+        q: mp.Queue = None,
+        started_event: mp.Event = None
+):
+    set_httpx_config()
+
+    kwargs = get_model_worker_config(model_name)
+    host = kwargs.pop('host')
+    port = kwargs.pop('port')
+    kwargs['model_name'] = [model_name]
+    kwargs['controller_address'] = controller_address or fschat_controller_address()
+    kwargs['worker_address'] = fschat_controller_address(model_name)
+    model_path = kwargs.get('model_path', '')
+    kwargs['model_path'] = model_path
+
+    app = create_model_worker_app(log_level=log_level, **kwargs)
+    _set_app_event(app, started_event)
+    if log_level == 'ERROR':
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+    @app.post('/release')
+    def release_model(
+            new_model_name: str = Body(None, description="释放后加载该模型"),
+            keep_origin: bool = Body(False, description='不释放原模型，加载新的模型')
+    ) -> Dict:
+        # 如果是不释放原模型的话，需要在Queue中加一条start 记录
+        if keep_origin:
+            if new_model_name:
+                q.put([model_name, 'start', new_model_name])
+        else:
+            if new_model_name:
+                q.put([model_name, 'replace', new_model_name])
+            else:
+                q.put([model_name, 'stop', None])
+        return {'code': 200, 'msg': 'done!'}
+
+    uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
+
+
 
 def start_main_server():
     import time
@@ -177,6 +311,30 @@ def start_main_server():
     )
 
     processes['openai_api'] = process
+
+    model_worker_started = []
+    # 启动在线和离线大模型（没有离线）
+    for model_name in args.model_name:
+        config = get_model_worker_config(model_name)
+        if (config.get('online_api')
+            and config.get('worker_class')
+            and model_name in FSCHAT_MODEL_WORKERS):
+            e = manager.Event()
+            model_worker_started.append(e)
+            # 启动在线模型进程
+            process = Process(
+                target=run_model_worker,
+                name=f'api_worker - {model_name}',
+                kwargs=dict(model_name=model_name,
+                            controller_address=args.controller_address,
+                            log_level=log_level,
+                            q=queue,
+                            started_event=e
+                            ),
+                daemon=True
+            )
+            processes['online_api'][model_name] = process
+    api_started = manager.Event()
 
     pass
 

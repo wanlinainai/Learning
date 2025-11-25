@@ -8,7 +8,8 @@ load_dotenv()
 EMBEDDING_MODEL = "text-embedding-3-small" # 价格便宜： 输入价格：$0.02，输出：$0.02
 
 # 大语言模型
-LLM_MODELS = ["chatglm3-6b", "zhipu-api"]
+LLM_MODELS = ["zhipu-api"]
+# "chatglm3-6b",
 
 # 本地化模型
 MODEL_PATH = {
@@ -28,8 +29,7 @@ ONLINE_LLM_MODEL = {
     "zhipu-api": {
         "api-key": os.getenv("ZHIPU_API_KEY", ''),
         'version': os.getenv("ZHIPU_VERSION", ''),
-        'provider': os.getenv("ZHIPU_PROVIDER", ''),
-        'base-url': os.getenv("ZHIPU_BASE_URL", '')
+        'provider': os.getenv("ZHIPU_PROVIDER", '')
     },
 
     "openai-api": {
