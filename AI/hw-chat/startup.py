@@ -15,6 +15,7 @@ from configs.basic_config import logger, LOG_PATH
 from configs.model_config import LLM_MODELS
 from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API, \
     API_SERVER
+from server.api_router import create_app
 from server.utils import get_httpx_client, fschat_controller_address, set_httpx_config, get_model_worker_config
 
 
