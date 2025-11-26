@@ -1,8 +1,11 @@
+import asyncio
+import logging
 import os
-from typing import Any, List, Dict, Union
+from typing import Any, List, Dict, Union, Callable, Optional, Awaitable
 
 import httpx
 import pydantic
+from langchain_openai import ChatOpenAI
 from mpmath import isint
 from pydantic import BaseModel
 
@@ -10,6 +13,7 @@ from configs.basic_config import logger, log_verbose
 from configs.model_config import MODEL_PATH, ONLINE_LLM_MODEL, LLM_MODELS
 from configs.server_config import FSCHAT_MODEL_WORKERS, HTTPX_DEFAULT_TIMEOUT, FSCHAT_CONTROLLER, FSCHAT_OPENAI_API
 from server import model_workers
+from server.minx_chat_openai import MinxChatOpenAI
 
 
 class BaseResponse(BaseModel):
@@ -51,6 +55,44 @@ def fschat_openai_api_address() -> str:
         host = '127.0.0.1'
     port = FSCHAT_OPENAI_API['port']
     return f'http://{host}:{port}/v1'
+
+def get_ChatOpenAI(
+        model_name: str,
+        temperature: float,
+        max_tokens: int = None,
+        streaming: bool = True,
+        callbacks: List[Callable] = [],
+        verbose: bool = True,
+        **kwargs: Any
+) -> ChatOpenAI:
+    """
+    创建 ChatOpenAI 实例的函数，在参数中自定义一些常用参数
+    :param model_name:
+    :param temperature:
+    :param max_tokens:
+    :param streaming:
+    :param callbacks:
+    :param verbose:
+    :param kwargs:
+    :return:
+    """
+    config = get_model_worker_config(model_name)
+    # 修改编码器
+    ChatOpenAI._get_encoding_model = MinxChatOpenAI.get_encoding_model
+    model = ChatOpenAI(
+        streaming=streaming,
+        verbose=verbose,
+        callbacks=callbacks,
+        openai_api_key=config.get('api_key', "EMPTY"),
+        openai_api_base=config.get('api_base_url', fschat_openai_api_address()),
+        model_name=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        openai_proxy=config.get('openai_proxy', None),
+        **kwargs,
+    )
+
+    return model
 
 def set_httpx_config(
         timeout: float = HTTPX_DEFAULT_TIMEOUT,
@@ -218,3 +260,29 @@ def get_model_worker_config(model_name: str = None) -> dict:
                 msg = f'在线模型 ‘{model_name}’ 的provider没有正确配置，请检查'
                 logger.error(f'{e.__class__.__name__}: {msg}', exc_info=e if log_verbose else None)
     return config
+
+def get_prompt_template(type: str, name: str) -> Optional[str]:
+    '''
+    从prompt_config 中加载模板内容
+    :param type: 模型类型：llm_chat、knowledge_base_chat
+    :param name:
+    :return:
+    '''
+    from configs import prompt_config
+    # 热启动
+    import importlib
+    importlib.reload(prompt_config)
+    return prompt_config.PROMPT_TEMPLATES[type].get(name)
+
+async def wrap_done(fn: Awaitable, event: asyncio.Event):
+    log_verbose = False
+
+    try:
+        await fn
+    except Exception as e:
+        logging.exception(e)
+        msg = f'发生异常: {e}'
+        logger.error(f'{e.__class__.__name__}: {msg}',
+                     exc_info=e if log_verbose else None)
+    finally:
+        event.set()

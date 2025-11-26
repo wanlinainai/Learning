@@ -1,5 +1,7 @@
 import uuid
-from typing import Dict
+from typing import Dict, List
+
+from sqlalchemy import select
 
 from server.db import ConversationModel, MessageModel
 from server.db.session import with_async_session
@@ -60,3 +62,20 @@ async def add_message_to_db(
     
     await session.commit()
     return m.id
+
+async def filter_message(session, conversation_id: str, limit: int) -> List[MessageModel]:
+    """
+    找到会话记录中的消息
+    :param conversation_id:
+    :param limit:
+    :return:
+    """
+    result = await session.execute(
+        select(MessageModel)
+        .filter(MessageModel.conversation_id==conversation_id)
+        .filter(MessageModel.response != '')
+        .order_by(MessageModel.create_time.asc())
+        .limit(limit)
+    )
+
+    return result.scalars().all()
