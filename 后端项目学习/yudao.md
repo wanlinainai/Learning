@@ -110,6 +110,91 @@
 
 如果用户注销登录，删除访问令牌（删除数据库中的和Redis中的），之后删除刷新令牌。之后所有接口进行校验的时候就会出现用户认证失败的问题自动重定向到登录页面。
 
+#### Token校验
+
+前端会携带header中携带的Token的请求发送到后台，在后台中的自定义的 Spring Security 配置适配器实现类中（**YudaoWebSecurityConfigurerAdapter**）添加：
+
+```java
+// 添加 Token Filter
+httpSecurity.addFilterBefore(authenticationTokenFilter, UsernamePasswordAuthenticationFilter.class);
+```
+
+走到我们新增的Token过滤器**TokenAuthenticationFilter**。
+
+1. 拿到前端传到后端的Token，需要去除Bear。
+2. 获取用户类型（根据请求路径是**/admin-api/**** 或者 **/app-api/****）来判断是什么类型。
+3. 根据Token创建登录用户。
+4. 将用户设置到Spring Security上下文中。
+
+```java
+    public static void setLoginUser(LoginUser loginUser, HttpServletRequest request) {
+        // 创建 Authentication，并设置到上下文
+        Authentication authentication = buildAuthentication(loginUser, request);
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        // 额外设置到 request 中，用于 ApiAccessLogFilter 可以获取到用户编号；
+        // 原因是，Spring Security 的 Filter 在 ApiAccessLogFilter 后面，在它记录访问日志时，线上上下文已经没有用户编号等信息
+        if (request != null) {
+            WebFrameworkUtils.setLoginUserId(request, loginUser.getId());
+            WebFrameworkUtils.setLoginUserType(request, loginUser.getUserType());
+        }
+    }
+```
+
+5. 在业务逻辑中使用这个loginUser的时候直接从Spring Security上下文获取即可。
+
+#### 如何刷新用户令牌
+
+如果修改了accesstoken，后端接口会报错401，前端拿到这个结果需要重新进行刷新接口的请求。也就是：**/system/auth/refresh-token**，后端的步骤：
+
+1. 根据refreshToken获取到表中的数据
+2. 移除相关的访问令牌
+3. 如果refreshToken过期的话需要删除这个刷新令牌
+4. 创建访问令牌（调用之前相同的方法：createOAuth2AccessToken）
+
+代码：
+
+```java
+@Override
+    @Transactional(rollbackFor = Exception.class)
+    public OAuth2AccessTokenDO refreshAccessToken(String refreshToken, String clientId) {
+        // 查询访问令牌
+        OAuth2RefreshTokenDO refreshTokenDO = oauth2RefreshTokenMapper.selectByRefreshToken(refreshToken);
+        if (refreshTokenDO == null) {
+            throw exception0(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "无效的刷新令牌");
+        }
+
+        // 校验 Client 匹配
+        OAuth2ClientDO clientDO = oauth2ClientService.validOAuthClientFromCache(clientId);
+        if (ObjectUtil.notEqual(clientId, refreshTokenDO.getClientId())) {
+            throw exception0(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "刷新令牌的客户端编号不正确");
+        }
+
+        // 移除相关的访问令牌
+        List<OAuth2AccessTokenDO> accessTokenDOs = oauth2AccessTokenMapper.selectListByRefreshToken(refreshToken);
+        if (CollUtil.isNotEmpty(accessTokenDOs)) {
+            oauth2AccessTokenMapper.deleteByIds(convertSet(accessTokenDOs, OAuth2AccessTokenDO::getId));
+            oauth2AccessTokenRedisDAO.deleteList(convertSet(accessTokenDOs, OAuth2AccessTokenDO::getAccessToken));
+        }
+
+        // 已过期的情况下，删除刷新令牌
+        if (DateUtils.isExpired(refreshTokenDO.getExpiresTime())) {
+            oauth2RefreshTokenMapper.deleteById(refreshTokenDO.getId());
+            throw exception0(GlobalErrorCodeConstants.UNAUTHORIZED.getCode(), "刷新令牌已过期");
+        }
+
+        // 创建访问令牌
+        return createOAuth2AccessToken(refreshTokenDO, clientDO);
+    }
+```
+
+> 有可能有一个问题：就是已经过期的话这个刷新令牌删除了，但是重新生成的只是accessToken，没有重新生成设置刷新令牌，访问令牌本身时间很短，有可能几天就过期了，这不就又重定向到登录页面了吗？
+>
+> 对的。这种本身是针对B端使用的场景，需要的就是这种较为安全的策略方式，如果真的想要长时间进行续期，可以考虑两点：
+>
+> 1. 在请求到这个接口的时候设置重新将refreshToken中的过期时间重新设置成长时间天数，之后请求的话就不会重新设置了。
+> 2. 每次执行接口的 时候都需要重新设置refreshToken，但是这种方法很明显不如第一种方案，数据库侵入性比较小。要是说安全的话其实也没有提升多少。
+
 
 
 
