@@ -233,7 +233,249 @@ yudao:
 
 
 
+### 三方登录
 
+流程图如图所示：
+
+![image-20260108004231128](images/yudao/image-20260108004231128.png)
+
+## 框架组件
+
+### 操作日志、访问日志、错误日志处理
+
+#### 访问日志
+
+我们定义了一个注解：**@ApiAccesLog**
+
+```java
+@Target({ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ApiAccessLog {
+
+    // ========== 开关字段 ==========
+
+    /**
+     * 是否记录访问日志
+     */
+    boolean enable() default true;
+    /**
+     * 是否记录请求参数
+     *
+     * 默认记录，主要考虑请求数据一般不大。可手动设置为 false 进行关闭
+     */
+    boolean requestEnable() default true;
+    /**
+     * 是否记录响应结果
+     *
+     * 默认不记录，主要考虑响应数据可能比较大。可手动设置为 true 进行打开
+     */
+    boolean responseEnable() default false;
+    /**
+     * 敏感参数数组
+     *
+     * 添加后，请求参数、响应结果不会记录该参数
+     */
+    String[] sanitizeKeys() default {};
+
+    // ========== 模块字段 ==========
+
+    /**
+     * 操作模块
+     *
+     * 为空时，会尝试读取 {@link io.swagger.v3.oas.annotations.tags.Tag#name()} 属性
+     */
+    String operateModule() default "";
+    /**
+     * 操作名
+     *
+     * 为空时，会尝试读取 {@link io.swagger.v3.oas.annotations.Operation#summary()} 属性
+     */
+    String operateName() default "";
+    /**
+     * 操作分类
+     *
+     * 实际并不是数组，因为枚举不能设置 null 作为默认值
+     */
+    OperateTypeEnum[] operateType() default {};
+
+}
+```
+
+之后我们定义一个过滤器：**ApiAccessLogFilter**，作用是在过滤器中拿到请求和响应进行参数处理。
+
+```java
+public class ApiAccessLogFilter extends ApiRequestFilter
+```
+
+这个类继承自ApiRequestFilter，下方就是父类实现方式，主要是过滤出只有API的接口。
+
+```java
+@RequiredArgsConstructor
+public abstract class ApiRequestFilter extends OncePerRequestFilter {
+
+    protected final WebProperties webProperties;
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // 只过滤 API 请求的地址
+        String apiUri = request.getRequestURI().substring(request.getContextPath().length());
+        return !StrUtil.startWithAny(apiUri, webProperties.getAdminApi().getPrefix(), webProperties.getAppApi().getPrefix());
+    }
+}
+```
+
+之后在ApiRequestFilter中重写方法：
+
+```java
+    @Override
+    @SuppressWarnings("NullableProblems")
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+        // 获得开始时间
+        LocalDateTime beginTime = LocalDateTime.now();
+        // 提前获得参数，避免 XssFilter 过滤处理
+        Map<String, String> queryString = ServletUtils.getParamMap(request);
+        String requestBody = ServletUtils.isJsonRequest(request) ? ServletUtils.getBody(request) : null;
+
+        try {
+            // 继续过滤器
+            filterChain.doFilter(request, response);
+            // 正常执行，记录日志
+            createApiAccessLog(request, beginTime, queryString, requestBody, null);
+        } catch (Exception ex) {
+            // 异常执行，记录日志
+            createApiAccessLog(request, beginTime, queryString, requestBody, ex);
+            throw ex;
+        }
+    }
+```
+
+> 在上述方法中，首先记录开始时间，之后进行`filterChain.doFilter(request, response);`处理，得到响应，正常情况下，在标准的Servlet中，`HttpServletResponse`只能输出流，拿不到Controller的`CommonResult`（统一返回结果类）的，所以需要一个全局返回对象处理类，`GlobalResponseBodyHandler`，代码如下：
+>
+> ```java
+> @ControllerAdvice
+> public class GlobalResponseBodyHandler implements ResponseBodyAdvice {
+>     @Override
+>     @SuppressWarnings("NullableProblems") // 避免 IDEA 警告
+>     public boolean supports(MethodParameter returnType, Class converterType) {
+>         if (returnType.getMethod() == null) {
+>             return false;
+>         }
+>         // 只拦截返回结果为 CommonResult 类型
+>         return returnType.getMethod().getReturnType() == CommonResult.class;
+>     }
+> 
+>     @Override
+>     @SuppressWarnings("NullableProblems") // 避免 IDEA 警告
+>     public Object beforeBodyWrite(Object body, MethodParameter returnType, MediaType selectedContentType, Class selectedConverterType,
+>                                   ServerHttpRequest request, ServerHttpResponse response) {
+>         // 记录 Controller 结果
+>         WebFrameworkUtils.setCommonResult(((ServletServerHttpRequest) request).getServletRequest(), (CommonResult<?>) body);
+>         return body;
+>     }
+> }
+> ```
+>
+> supports方法作用是：判断返回结果是不是CommonResult类型，如果不是就不需要处理。
+>
+> beforeBodyWrite方法作用是：向WebFrameworkUtils设置CommonResult结果，之后可以在过滤器中继续使用。
+>
+> 之后走正常执行的日志记录逻辑。
+
+```java
+    private void createApiAccessLog(HttpServletRequest request, LocalDateTime beginTime,
+                                    Map<String, String> queryString, String requestBody, Exception ex) {
+        ApiAccessLogCreateReqDTO accessLog = new ApiAccessLogCreateReqDTO();
+        try {
+            boolean enable = buildApiAccessLog(accessLog, request, beginTime, queryString, requestBody, ex);
+            if (!enable) {
+                return;
+            }
+            apiAccessLogApi.createApiAccessLogAsync(accessLog);
+        } catch (Throwable th) {
+            log.error("[createApiAccessLog][url({}) log({}) 发生异常]", request.getRequestURI(), toJsonString(accessLog), th);
+        }
+    }
+```
+
+上述方法就是在判断是否需要记录日志之后进行日志的记录同时需要构建accessLog参数。
+
+下面介绍最重要的**buildApiAccessLog**判断是否记录日志的逻辑。
+
+```java
+private boolean buildApiAccessLog(ApiAccessLogCreateReqDTO accessLog, HttpServletRequest request, LocalDateTime beginTime,
+                                      Map<String, String> queryString, String requestBody, Exception ex) {
+        // 判断：是否要记录操作日志
+        HandlerMethod handlerMethod = (HandlerMethod) request.getAttribute(ATTRIBUTE_HANDLER_METHOD);
+        ApiAccessLog accessLogAnnotation = null;
+        if (handlerMethod != null) {
+            accessLogAnnotation = handlerMethod.getMethodAnnotation(ApiAccessLog.class);
+            if (accessLogAnnotation != null && BooleanUtil.isFalse(accessLogAnnotation.enable())) {
+                return false;
+            }
+        }
+
+        // 处理用户信息
+        accessLog.setUserId(WebFrameworkUtils.getLoginUserId(request))
+                .setUserType(WebFrameworkUtils.getLoginUserType(request));
+        // 设置访问结果
+        CommonResult<?> result = WebFrameworkUtils.getCommonResult(request);
+        if (result != null) {
+            accessLog.setResultCode(result.getCode()).setResultMsg(result.getMsg());
+        } else if (ex != null) {
+            accessLog.setResultCode(GlobalErrorCodeConstants.INTERNAL_SERVER_ERROR.getCode())
+                    .setResultMsg(ExceptionUtil.getRootCauseMessage(ex));
+        } else {
+            accessLog.setResultCode(GlobalErrorCodeConstants.SUCCESS.getCode()).setResultMsg("");
+        }
+        // 设置请求字段
+        accessLog.setTraceId(TracerUtils.getTraceId()).setApplicationName(applicationName)
+                .setRequestUrl(request.getRequestURI()).setRequestMethod(request.getMethod())
+                .setUserAgent(ServletUtils.getUserAgent(request)).setUserIp(ServletUtils.getClientIP(request));
+        String[] sanitizeKeys = accessLogAnnotation != null ? accessLogAnnotation.sanitizeKeys() : null;
+        Boolean requestEnable = accessLogAnnotation != null ? accessLogAnnotation.requestEnable() : Boolean.TRUE;
+        if (!BooleanUtil.isFalse(requestEnable)) { // 默认记录，所以判断 !false
+            Map<String, Object> requestParams = MapUtil.<String, Object>builder()
+                    .put("query", sanitizeMap(queryString, sanitizeKeys))
+                    .put("body", sanitizeJson(requestBody, sanitizeKeys)).build();
+            accessLog.setRequestParams(toJsonString(requestParams));
+        }
+        Boolean responseEnable = accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
+        if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
+            accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));
+        }
+        // 持续时间
+        accessLog.setBeginTime(beginTime).setEndTime(LocalDateTime.now())
+                .setDuration((int) LocalDateTimeUtil.between(accessLog.getBeginTime(), accessLog.getEndTime(), ChronoUnit.MILLIS));
+
+        // 操作模块
+        if (handlerMethod != null) {
+            Tag tagAnnotation = handlerMethod.getBeanType().getAnnotation(Tag.class);
+            Operation operationAnnotation = handlerMethod.getMethodAnnotation(Operation.class);
+            String operateModule = accessLogAnnotation != null && StrUtil.isNotBlank(accessLogAnnotation.operateModule()) ?
+                    accessLogAnnotation.operateModule() :
+                    tagAnnotation != null ? StrUtil.nullToDefault(tagAnnotation.name(), tagAnnotation.description()) : null;
+            String operateName = accessLogAnnotation != null && StrUtil.isNotBlank(accessLogAnnotation.operateName()) ?
+                    accessLogAnnotation.operateName() :
+                    operationAnnotation != null ? operationAnnotation.summary() : null;
+            OperateTypeEnum operateType = accessLogAnnotation != null && accessLogAnnotation.operateType().length > 0 ?
+                    accessLogAnnotation.operateType()[0] : parseOperateLogType(request);
+            accessLog.setOperateModule(operateModule).setOperateName(operateName).setOperateType(operateType.getType());
+        }
+        return true;
+    }
+```
+
+> 如果没有注解的话或者是显式的指定enable = false，会直接返回false。
+>
+> 如果存在注解并且没有显示的指定false，获取响应的**CommonResult**，如果注解中的**responseEnable**属性设置成true，就需要将这个内容一并设置到数据库中，之后设置一些请求的参数（getTraceId、getRequestURI、getUserAgent等），之后获取接口类和接口方法的swagger注释：
+>
+> ```java
+> Tag tagAnnotation = handlerMethod.getBeanType().getAnnotation(Tag.class);
+> Operation operationAnnotation = handlerMethod.getMethodAnnotation(Operation.class);
+> ```
+>
+> 其中的handlerMethod.getBeanType()是获取这个方法的bean类。getAnnotation是获取注解。getMethodAnnotation是获取方法上的注解。之后是在日志中是否处理敏感词一类的操作，个人感觉没有必要处理。如果需要处理的话，DFA算法处理，如果敏感词很多的话最好是使用定制方法，可控。Trie树（前缀树）、AC自动机。
 
 
 
