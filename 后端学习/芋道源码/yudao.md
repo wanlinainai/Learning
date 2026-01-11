@@ -481,6 +481,190 @@ private boolean buildApiAccessLog(ApiAccessLogCreateReqDTO accessLog, HttpServle
 
 
 
+## Spring Cloud 微服务调试
+
+微服务的架构下，多服务的调试是非常大的痛点，大家使用同一个注册中心的时候，如果多个人在本地启动了相同的服务，调试的请求很可能会打到其他人的本地地址，实际上期望的是自己的服务。一般情况下都会在本地起一个注册中心，但是如果服务一旦多的话，本地电脑内存受不了。
+
+项目中实现了一个模块：**spring-boot-starter-env**组件，通过tag给服务打标签，实现在同一个注册中心的情况下，本地只需要正常启动服务，保证自己的请求会打到自己的服务。
+
+![image-20260111232943632](images/yudao/image-20260111232943632.png)
+
+启动Gateway服务、System服务、Infra服务。观察nacos中的服务metadata。
+
+gateway如下:
+
+![image-20260111233253030](images/yudao/image-20260111233253030.png)
+
+system服务如下：
+
+![image-20260111233317120](images/yudao/image-20260111233317120.png)
+
+#### 实现方法
+
+在**application.properties**文件中添加：`liangzhichao.env.tag=${HOSTNAME}`，之后使用`org.springframework.boot.env`包下的内容，定义一个多环境实现类（用来做环境隔离，就是在环境变量中设置tag属性），代码实现如下：
+
+```java
+public class EnvEnvironmentPostProcessor implements EnvironmentPostProcessor {
+    private static final Set<String> TARGET_TAG_KEYS = SetUtils.asSet(
+            "spring.cloud.nacos.discovery.metadata.tag" // Nacos 注册中心
+            // MQ TODO
+    );
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        // 0. 设置 ${HOST_NAME} 兜底的环境变量
+        String hostNameKey = StrUtil.subBetween(HOST_NAME_VALUE, "{", "}");
+        if (!environment.containsProperty(hostNameKey)) {
+            environment.getSystemProperties().put(hostNameKey, EnvUtils.getHostName());
+        }
+
+        // 1.1 如果没有 yudao.env.tag 配置项，则不进行配置项的修改
+        String tag = EnvUtils.getTag(environment);
+        if (StrUtil.isEmpty(tag)) {
+            return;
+        }
+        // 1.2 需要修改的配置项
+        for (String targetTagKey : TARGET_TAG_KEYS) {
+            String targetTagValue = environment.getProperty(targetTagKey);
+            if (StrUtil.isNotEmpty(targetTagValue)) {
+                continue;
+            }
+            environment.getSystemProperties().put(targetTagKey, tag);
+        }
+    }
+}
+```
+
+>  EnvironmentPostProcessor是一个用于在Spring环境准备完成之后、应用上下文创建之前，对配置环境进行自定义处理。
+>
+> 启动流程：
+>
+> 1. SpringApplication.run()；
+> 2. 环境准备时期：创建ConfigurableEnvironment对象。
+> 3. 属性加载：加载application.yaml文件配置。
+> 4. EnvironmentPostProcessor执行-自定义环境处理。
+> 5. 应用上下文创建-创建ApplicationContext。
+> 6. Bean加载和初始化-完成应用的启动。
+
+由于这个EnvironmentPostProcessor的执行时机是在nacos执行之前，所以在nacos加载的时候可以做到侵入式的添加metadata = {tag}。
+
+#### 网关转发过程
+
+实现类：`GrayLoadBalancer`。
+
+发现服务：
+
+```java
+ @Override
+    public Mono<Response<ServiceInstance>> choose(Request request) {
+        // 获得 HttpHeaders 属性，实现从 header 中获取 version
+        HttpHeaders headers = ((RequestDataContext) request.getContext()).getClientRequest().getHeaders();
+        // 选择实例
+        ServiceInstanceListSupplier supplier = serviceInstanceListSupplierProvider.getIfAvailable(NoopServiceInstanceListSupplier::new);
+        return supplier.get(request).next().map(list -> getInstanceResponse(list, headers));
+    }
+```
+
+核心通过注册中心的**ServiceInstanceListSupplier**进行服务注册的发现，使用**get(Request)**发现服务。之后获取响应实例：
+
+```java
+    private Response<ServiceInstance> getInstanceResponse(List<ServiceInstance> instances, HttpHeaders headers) {
+        // 如果服务实例为空，则直接返回
+        if (CollUtil.isEmpty(instances)) {
+            log.warn("[getInstanceResponse][serviceId({}) 服务实例列表为空]", serviceId);
+            return new EmptyResponse();
+        }
+
+        // 筛选满足 version 条件的实例列表
+        String version = headers.getFirst(VERSION);
+        List<ServiceInstance> chooseInstances;
+        if (StrUtil.isEmpty(version)) {
+            chooseInstances = instances;
+        } else {
+            chooseInstances = CollectionUtils.filterList(instances, instance -> version.equals(instance.getMetadata().get("version")));
+            if (CollUtil.isEmpty(chooseInstances)) {
+                log.warn("[getInstanceResponse][serviceId({}) 没有满足版本({})的服务实例列表，直接使用所有服务实例列表]", serviceId, version);
+                chooseInstances = instances;
+            }
+        }
+
+        // 基于 tag 过滤实例列表
+        chooseInstances = filterTagServiceInstances(chooseInstances, headers);
+
+        // 随机 + 权重获取实例列表 TODO 芋艿：目前直接使用 Nacos 提供的方法，如果替换注册中心，需要重新失败该方法
+        return new DefaultResponse(NacosBalancer.getHostByRandomWeight3(chooseInstances));
+    }
+```
+
+下面是基于tag请求头，过滤匹配的服务实例列表：
+
+```java
+    private List<ServiceInstance> filterTagServiceInstances(List<ServiceInstance> instances, HttpHeaders headers) {
+        // 情况一，没有 tag 时，过滤掉有 tag 的节点。目的：避免 test 环境，打到本地有 tag 的实例
+        String tag = EnvUtils.getTag(headers);
+        if (StrUtil.isEmpty(tag)) {
+            List<ServiceInstance> chooseInstances = CollectionUtils.filterList(instances, instance -> StrUtil.isEmpty(EnvUtils.getTag(instance)));
+            // 【重要】补充说明：如果希望在 chooseInstances 为空时，不允许打到有 tag 的实例，可以取消注释下面的代码
+            if (CollUtil.isEmpty(chooseInstances)) {
+                log.warn("[filterTagServiceInstances][serviceId({}) 没有不带 tag 的服务实例列表，直接使用所有服务实例列表]", serviceId);
+                chooseInstances = instances;
+            }
+            return chooseInstances;
+        }
+
+        // 情况二，有 tag 时，使用 tag 匹配服务实例
+        List<ServiceInstance> chooseInstances = CollectionUtils.filterList(instances, instance -> tag.equals(EnvUtils.getTag(instance)));
+        if (CollUtil.isEmpty(chooseInstances)) {
+            log.warn("[filterTagServiceInstances][serviceId({}) 没有满足 tag({}) 的服务实例列表，直接使用所有服务实例列表]", serviceId, tag);
+            chooseInstances = instances;
+        }
+        return chooseInstances;
+    }
+```
+
+最终会在**GrayReactiveLoadBalancerClientFilter**过滤器中将服务的地址进行替换：
+
+```java
+return choose(lbRequest, serviceId, supportedLifecycleProcessors).doOnNext(response -> {
+                    if (!response.hasServer()) {
+                        supportedLifecycleProcessors.forEach(lifecycle -> lifecycle
+                                .onComplete(new CompletionContext<>(CompletionContext.Status.DISCARD, lbRequest, response)));
+                        throw NotFoundException.create(properties.isUse404(), "Unable to find instance for " + url.getHost());
+                    }
+
+                    ServiceInstance retrievedInstance = response.getServer();
+
+                    URI uri = exchange.getRequest().getURI();
+
+                    // if the `lb:<scheme>` mechanism was used, use `<scheme>` as the default,
+                    // if the loadbalancer doesn't provide one.
+                    String overrideScheme = retrievedInstance.isSecure() ? "https" : "http";
+                    if (schemePrefix != null) {
+                        overrideScheme = url.getScheme();
+                    }
+
+                    DelegatingServiceInstance serviceInstance = new DelegatingServiceInstance(retrievedInstance,
+                            overrideScheme);
+
+                    URI requestUrl = reconstructURI(serviceInstance, uri);
+
+                    if (log.isTraceEnabled()) {
+                        log.trace("LoadBalancerClientFilter url chosen: " + requestUrl);
+                    }
+                    exchange.getAttributes().put(GATEWAY_REQUEST_URL_ATTR, requestUrl);
+                    exchange.getAttributes().put(GATEWAY_LOADBALANCER_RESPONSE_ATTR, response);
+                    supportedLifecycleProcessors.forEach(lifecycle -> lifecycle.onStartRequest(lbRequest, response));
+                }).then(chain.filter(exchange))
+                .doOnError(throwable -> supportedLifecycleProcessors.forEach(lifecycle -> lifecycle
+                        .onComplete(new CompletionContext<ResponseData, ServiceInstance, RequestDataContext>(
+                                CompletionContext.Status.FAILED, throwable, lbRequest,
+                                exchange.getAttribute(GATEWAY_LOADBALANCER_RESPONSE_ATTR)))))
+                .doOnSuccess(aVoid -> supportedLifecycleProcessors.forEach(lifecycle -> lifecycle
+                        .onComplete(new CompletionContext<ResponseData, ServiceInstance, RequestDataContext>(
+                                CompletionContext.Status.SUCCESS, lbRequest,
+                                exchange.getAttribute(GATEWAY_LOADBALANCER_RESPONSE_ATTR),
+                                new ResponseData(exchange.getResponse(), new RequestData(exchange.getRequest()))))));
+```
+
 
 
 
