@@ -667,7 +667,317 @@ return choose(lbRequest, serviceId, supportedLifecycleProcessors).doOnNext(respo
 
 
 
+## SaaS多租户
 
+### 技术组件
+
+#### 如何实现多租户的DB封装？
+
+实现方案：
+
+|           | 方案一：独立数据库（分库） | 方案二：共享数据库，独立的Schema（分表） | 方案三：共享数据库，共享Schema，共享数据表 |
+| --------- | -------------------------- | ---------------------------------------- | ------------------------------------------ |
+| 维护成本  | 高                         | 中                                       | 低                                         |
+| 隔离性    | 高                         | 高                                       | 低                                         |
+| 性能      | 强                         | 中                                       | 低                                         |
+| 硬件成本  | 高                         | 中                                       | 低                                         |
+| 备份/还原 | 简单                       | 中                                       | 困难                                       |
+
+项目选择：为了维护成本低同时兼容性能足够满足机器，我们选择的方案三，基于MyBatis-Plus的**tenant_id**字段，自动进行过滤 **WHERE tenant_id = ?**。
+
+未来扩展：如果是小租户，业务量比较大了之后可以采用Sharding-Sphere分库分表；大租户的话，独立的数据库，甚至是一个大租户多个库 + 数据表（也可以采取分库分表）。
+
+整体实现多租户功能是基于Mybatis-Plus的多租户插件实现的，[Mybatis-plus插件](https://baomidou.com/plugins/tenant/)。
+
+#### 代码实现
+
+首先我们需要用到的是租户ID，在数据库表中需要加上对应的tenant_id，比如member_user表：
+
+![image-20260114001429617](images/yudao/image-20260114001429617.png)
+
+由于mybatis-Plus默认使用的字段名就是这个。所以定义的时候最好一致。下面是拓展多租户的实体类：**TenantBaseDO**
+
+```java
+@Data
+@EqualsAndHashCode(callSuper = true)
+public abstract class TenantBaseDO extends BaseDO {
+    /**
+     * 多租户编号
+     */
+    private Long tenantId;
+}
+```
+
+可以先根据MyBatis-Plus看一下如果是一个租户系统的话需要实现哪一个接口，其中有哪一些方法操作。
+
+打开链接，`tenantLineHandler`是核心的接口，用于处理租户逻辑相关的内容。接口中存在如下方法：
+
+1. getTenantId（获取租户ID值的表达式）
+2. getTenantIdColumn（获取租户的字段名，默认是：tenant_id）
+3. ignoreTable（根据表名判断是否需要忽略拼接多租户条件）
+4. ignoreInsert（忽略插入租户字段逻辑）
+
+大概就是两种，一种是关于租户ID值的表达式，另一种是是否忽略掉一些表结构。
+
+我们在**project-server**中加上租户对应的配置：
+
+```yaml
+  tenant: # 多租户相关配置项
+    enable: true
+    ignore-urls:
+      - /jmreport/* # 积木报表，无法携带租户编号
+    ignore-visit-urls:
+      - /admin-api/system/user/profile/**
+      - /admin-api/system/auth/**
+    ignore-tables:
+    ignore-caches:
+      - user_role_ids
+      - permission_menu_ids
+      - oauth_client
+      - notify_template
+      - mail_account
+      - mail_template
+      - sms_template
+      - iot:device
+      - iot:thing_model_list
+```
+
+之后创建实体类映射到这个yaml配置中。
+
+```java
+@ConfigurationProperties(prefix = "yudao.tenant")
+@Data
+public class TenantProperties {
+
+    /**
+     * 租户是否开启
+     */
+    private static final Boolean ENABLE_DEFAULT = true;
+
+    /**
+     * 是否开启
+     */
+    private Boolean enable = ENABLE_DEFAULT;
+
+    /**
+     * 需要忽略多租户的请求
+     *
+     * 默认情况下，每个请求需要带上 tenant-id 的请求头。但是，部分请求是无需带上的，例如说短信回调、支付回调等 Open API！
+     */
+    private Set<String> ignoreUrls = new HashSet<>();
+
+    /**
+     * 需要忽略跨（切换）租户访问的请求
+     *
+     * 原因是：某些接口，访问的是个人信息，在跨租户是获取不到的！
+     */
+    private Set<String> ignoreVisitUrls = Collections.emptySet();
+
+    /**
+     * 需要忽略多租户的表
+     *
+     * 即默认所有表都开启多租户的功能，所以记得添加对应的 tenant_id 字段哟
+     */
+    private Set<String> ignoreTables = Collections.emptySet();
+
+    /**
+     * 需要忽略多租户的 Spring Cache 缓存
+     *
+     * 即默认所有缓存都开启多租户的功能，所以记得添加对应的 tenant_id 字段哟
+     */
+    private Set<String> ignoreCaches = Collections.emptySet();
+
+}
+```
+
+自动配置类是：**YudaoTenantAutoConfiguration**
+
+```java
+@AutoConfiguration
+@ConditionalOnProperty(prefix = "yudao.tenant", value = "enable", matchIfMissing = true) // 允许使用 yudao.tenant.enable=false 禁用多租户
+@EnableConfigurationProperties(TenantProperties.class)
+public class YudaoTenantAutoConfiguration {
+}
+```
+
+对应路径：**META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports**中加入对应配置类信息：
+
+```shell
+cn.iocoder.yudao.framework.tenant.config.YudaoTenantRpcAutoConfiguration
+cn.iocoder.yudao.framework.tenant.config.YudaoTenantAutoConfiguration
+```
+
+在自动配置类中最主要的是将我们自定义的拦截器添加到MyBatis-Plus的拦截器中。
+
+```java
+    @Bean
+    public TenantLineInnerInterceptor tenantLineInnerInterceptor(TenantProperties properties,
+                                                                 MybatisPlusInterceptor interceptor) {
+        TenantLineInnerInterceptor inner = new TenantLineInnerInterceptor(new TenantDatabaseInterceptor(properties));
+        // 添加到 interceptor 中
+        // 需要加在首个，主要是为了在分页插件前面。这个是 MyBatis Plus 的规定
+        MyBatisUtils.addInterceptor(interceptor, inner, 0);
+        return inner;
+    }
+```
+
+接下来是**TenantDatabaseInterceptor**类代码：
+
+```java
+public class TenantDatabaseInterceptor implements TenantLineHandler {
+
+    /**
+     * 忽略的表
+     *
+     * KEY：表名
+     * VALUE：是否忽略
+     */
+    private final Map<String, Boolean> ignoreTables = new HashMap<>();
+
+    public TenantDatabaseInterceptor(TenantProperties properties) {
+        // 不同 DB 下，大小写的习惯不同，所以需要都添加进去
+        properties.getIgnoreTables().forEach(table -> {
+            addIgnoreTable(table, true);
+        });
+        // 在 OracleKeyGenerator 中，生成主键时，会查询这个表，查询这个表后，会自动拼接 TENANT_ID 导致报错
+        addIgnoreTable("DUAL", true);
+    }
+
+    @Override
+    public Expression getTenantId() {
+        return new LongValue(TenantContextHolder.getRequiredTenantId());
+    }
+
+    @Override
+    public boolean ignoreTable(String tableName) {
+        // 情况一，全局忽略多租户
+        if (TenantContextHolder.isIgnore()) {
+            return true;
+        }
+        // 情况二，忽略多租户的表
+        tableName = SqlParserUtils.removeWrapperSymbol(tableName);
+        Boolean ignore = ignoreTables.get(tableName.toLowerCase());
+        if (ignore == null) {
+            ignore = computeIgnoreTable(tableName);
+            synchronized (ignoreTables) {
+                addIgnoreTable(tableName, ignore);
+            }
+        }
+        return ignore;
+    }
+
+    private void addIgnoreTable(String tableName, boolean ignore) {
+        ignoreTables.put(tableName.toLowerCase(), ignore);
+        ignoreTables.put(tableName.toUpperCase(), ignore);
+    }
+
+    private boolean computeIgnoreTable(String tableName) {
+        // 找不到的表，说明不是 yudao 项目里的，不进行拦截（忽略租户）
+        TableInfo tableInfo = TableInfoHelper.getTableInfo(tableName);
+        if (tableInfo == null) {
+            return true;
+        }
+        // 如果继承了 TenantBaseDO 基类，显然不忽略租户
+        if (TenantBaseDO.class.isAssignableFrom(tableInfo.getEntityType())) {
+            return false;
+        }
+        // 如果添加了 @TenantIgnore 注解，则忽略租户
+        TenantIgnore tenantIgnore = tableInfo.getEntityType().getAnnotation(TenantIgnore.class);
+        return tenantIgnore != null;
+    }
+
+}
+```
+
+通过实现**TenantLineHandler**类重写方法分别获取到租户ID和忽略对应表结构。
+
+这个租户ID是通过ThreadLocal进行存储的，`private static final ThreadLocal<Long> TENANT_ID = new TransmittableThreadLocal<>();`那么这个租户id是在什么时候设置的呢？有拦截器难道没有过滤器？是的，我们是存在这个过滤器的：**TenantContextWebFilter**。代码如下：
+
+```java
+public class    TenantContextWebFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        // 设置
+        Long tenantId = WebFrameworkUtils.getTenantId(request);
+        if (tenantId != null) {
+            TenantContextHolder.setTenantId(tenantId);
+        }
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            // 清理
+            TenantContextHolder.clear();
+        }
+    }
+
+}
+```
+
+我们的租户ID是放在Header头中的，由于其他位置也会使用到这个租户ID，所以提供了一个统一的获取方法：`WebFrameworkUtils.getTenantId(request)`，之后设置租户ID，finally中clear清楚threadLocal中的数据。防止**线程污染**和**内存泄露**。
+
+在设置表实体类的时候，我们一般需要标识这个类是否需要忽略，怎么做好呢？难道是在yaml文件中加上忽略配置，之后在代码中进行统一判断实体类对应是否是需要忽略的表吗？很明显比较难搞。我们可以通过AOP的形式使用注解在类上标识这个实体类是否需要被忽略。
+
+```java
+@Target({ElementType.METHOD, ElementType.TYPE})
+@Retention(RetentionPolicy.RUNTIME)
+@Inherited
+public @interface TenantIgnore {
+
+    /**
+     * 是否开启忽略租户，默认为 true 开启
+     *
+     * 支持 Spring EL 表达式，如果返回 true 则满足条件，进行租户的忽略
+     */
+    String enable() default "true";
+}
+```
+
+切面：**TenantIgnoreAspect**
+
+```java
+@Aspect
+@Slf4j
+public class TenantIgnoreAspect {
+    @Around("@annotation(tenantIgnore)")
+    public Object around(ProceedingJoinPoint joinPoint, TenantIgnore tenantIgnore) throws Throwable {
+        Boolean oldIgnore = TenantContextHolder.isIgnore();
+        try {
+            // 计算条件，满足的情况下，才进行忽略
+            Object enable = SpringExpressionUtils.parseExpression(tenantIgnore.enable());
+            if (Boolean.TRUE.equals(enable)) {
+                TenantContextHolder.setIgnore(true);
+            }
+            // 执行逻辑
+            return joinPoint.proceed();
+        } finally {
+            TenantContextHolder.setIgnore(oldIgnore);
+        }
+    }
+}
+```
+
+```java
+    public static Object parseExpression(String expressionString) {
+        return parseExpression(expressionString, null);
+    }    
+
+		public static Object parseExpression(String expressionString, Map<String, Object> variables) {
+        if (StrUtil.isBlank(expressionString)) {
+            return null;
+        }
+        Expression expression = EXPRESSION_PARSER.parseExpression(expressionString);
+        StandardEvaluationContext context = new StandardEvaluationContext(); // 创建上下文环境
+        context.setBeanResolver(new BeanFactoryResolver(SpringUtil.getApplicationContext())); // 将IOC中的Bean都放入到上下文中
+        if (MapUtil.isNotEmpty(variables)) {
+            context.setVariables(variables);
+        }
+        return expression.getValue(context); // 获取到的是Boolean.TRUE，如果是其他类型的话获取到的可能是string类型的字符串
+    }
+```
+
+在**TenantDatabaseInterceptor**拦截器中的**computeIgnoreTable**方法中，是通过是否添加**@TenantIgnore**注解来判断需要过滤掉的表结构的。
 
 
 
