@@ -689,7 +689,7 @@ return choose(lbRequest, serviceId, supportedLifecycleProcessors).doOnNext(respo
 
 整体实现多租户功能是基于Mybatis-Plus的多租户插件实现的，[Mybatis-plus插件](https://baomidou.com/plugins/tenant/)。
 
-#### 代码实现
+##### 代码实现
 
 首先我们需要用到的是租户ID，在数据库表中需要加上对应的tenant_id，比如member_user表：
 
@@ -979,9 +979,217 @@ public class TenantIgnoreAspect {
 
 在**TenantDatabaseInterceptor**拦截器中的**computeIgnoreTable**方法中，是通过是否添加**@TenantIgnore**注解来判断需要过滤掉的表结构的。
 
+#### 如何实现缓存租户id
 
+先谈论如果要实现缓存租户ID，方案和DB的类似。
 
+- 方案一：独立数据库（分库），每一个租户对应一个Redis。
+- **×**方案二：共享数据库，独立的Schema（数据表）(很明显这个不合适，redis中压根没有表的概念)
+- 方案三：通过Redis Key做手段。原本Redis Key + ":" + tenantid（**user:1024**），现在的Key变成（**user:1:1024**，表示name + tenantid + id）
 
+使用方式：Spring Cache + Redis。
+
+##### 代码实现
+
+设置**tenantRedisCacheManager**为主要Bean，
+
+```java
+    @Bean
+    @Primary // 引入租户时，tenantRedisCacheManager 为主 Bean
+    public RedisCacheManager tenantRedisCacheManager(RedisTemplate<String, Object> redisTemplate,
+                                                     RedisCacheConfiguration redisCacheConfiguration,
+                                                     YudaoCacheProperties yudaoCacheProperties,
+                                                     TenantProperties tenantProperties) {
+        // 创建 RedisCacheWriter 对象
+        RedisConnectionFactory connectionFactory = Objects.requireNonNull(redisTemplate.getConnectionFactory());
+        RedisCacheWriter cacheWriter = RedisCacheWriter.nonLockingRedisCacheWriter(connectionFactory,
+                BatchStrategies.scan(yudaoCacheProperties.getRedisScanBatchSize()));
+        // 创建 TenantRedisCacheManager 对象
+        return new TenantRedisCacheManager(cacheWriter, redisCacheConfiguration, tenantProperties.getIgnoreCaches());
+    }
+```
+
+> RedisCacheWriter是缓存写入的组件，设置无锁Redis
+
+**TenantRedisCacheManager**类：
+
+```java
+@Slf4j
+public class TenantRedisCacheManager extends TimeoutRedisCacheManager {
+    private static final String SPLIT = "#";
+    private final Set<String> ignoreCaches;
+    public TenantRedisCacheManager(RedisCacheWriter cacheWriter,
+                                   RedisCacheConfiguration defaultCacheConfiguration,
+                                   Set<String> ignoreCaches) {
+        super(cacheWriter, defaultCacheConfiguration);
+        this.ignoreCaches = ignoreCaches;
+    }
+
+    @Override
+    public Cache getCache(String name) {
+        String[] names = StrUtil.splitToArray(name, SPLIT);
+        // 如果开启多租户，则 name 拼接租户后缀
+        if (!TenantContextHolder.isIgnore()
+                && TenantContextHolder.getTenantId() != null
+                && !CollUtil.contains(ignoreCaches, names[0])) {
+            name = name + ":" + TenantContextHolder.getTenantId();
+        }
+        // 继续基于父方法
+        return super.getCache(name);
+    }
+}
+```
+
+重写了**getCache**的逻辑，在@Cacheable(cacheNames = "name#过期时间", key = "#id")注解中拿到**name**，之后拼接：**:tenantid**，之后再设置key值即可。
+
+> 使用redis desktop manager的时候，如果使用默认生成的Key策略是两个:，即::，在软件中会存在一个空键，可能是软件问题，但是为了避免掉的话还是在设置Key的时候将::改成:。
+>
+> ```java
+> config = config.computePrefixWith(cacheName -> {
+>             String keyPrefix = cacheProperties.getRedis().getKeyPrefix();
+>             if (StringUtils.hasText(keyPrefix)) {
+>                 keyPrefix = keyPrefix.lastIndexOf(StrUtil.COLON) == -1 ? keyPrefix + StrUtil.COLON : keyPrefix;
+>                 return keyPrefix + cacheName + StrUtil.COLON;
+>             }
+>             return cacheName + StrUtil.COLON ;
+>         });
+> ```
+>
+> 重新定义JSON序列化的方式，使用Jackson。
+>
+> 设置过期时间。
+>
+> 是否缓存null值。
+
+```java
+@AutoConfiguration
+@EnableConfigurationProperties({CacheProperties.class, YudaoCacheProperties.class})
+@EnableCaching
+public class YudaoCacheAutoConfiguration {
+
+    /**
+     * RedisCacheConfiguration Bean
+     * <p>
+     * 参考 org.springframework.boot.autoconfigure.cache.RedisCacheConfiguration 的 createConfiguration 方法
+     */
+    @Bean
+    @Primary
+    public RedisCacheConfiguration redisCacheConfiguration(CacheProperties cacheProperties) {
+        RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig();
+        // 1. 重定义key的前置策略。
+        // 设置使用 : 单冒号，而不是双 :: 冒号，避免 Redis Desktop Manager 多余空格
+        // 详细可见 https://blog.csdn.net/chuixue24/article/details/103928965 博客
+        // 再次修复单冒号，而不是双 :: 冒号问题，Issues 详情：https://gitee.com/zhijiantianya/yudao-cloud/issues/I86VY2
+        config = config.computePrefixWith(cacheName -> {
+            String keyPrefix = cacheProperties.getRedis().getKeyPrefix();
+            if (StringUtils.hasText(keyPrefix)) {
+                keyPrefix = keyPrefix.lastIndexOf(StrUtil.COLON) == -1 ? keyPrefix + StrUtil.COLON : keyPrefix;
+                return keyPrefix + cacheName + StrUtil.COLON;
+            }
+            return cacheName + StrUtil.COLON ;
+        });
+
+        // 2. 重定义value的序列化方式。
+
+        // 设置使用 JSON 序列化方式
+        config = config.serializeValuesWith(
+                RedisSerializationContext.SerializationPair.fromSerializer(buildRedisSerializer()));
+        // 设置 CacheProperties.Redis 的属性
+        // 3. 重定义全局过期时间
+        CacheProperties.Redis redisProperties = cacheProperties.getRedis();
+        if (redisProperties.getTimeToLive() != null) {
+            config = config.entryTtl(redisProperties.getTimeToLive());
+        }
+
+        // 4. 重定义是否缓存 null 值
+        if (!redisProperties.isCacheNullValues()) {
+            config = config.disableCachingNullValues();
+        }
+        if (!redisProperties.isUseKeyPrefix()) {
+            config = config.disableKeyPrefix();
+        }
+        return config;
+    }
+
+    @Bean
+    public RedisCacheManager redisCacheManager(RedisTemplate<String, Object> redisTemplate,
+                                               RedisCacheConfiguration redisCacheConfiguration,
+                                               YudaoCacheProperties yudaoCacheProperties) {
+        // 创建 RedisCacheWriter 对象
+        RedisConnectionFactory connectionFactory = Objects.requireNonNull(redisTemplate.getConnectionFactory());
+        RedisCacheWriter cacheWriter = RedisCacheWriter.nonLockingRedisCacheWriter(connectionFactory,
+                BatchStrategies.scan(yudaoCacheProperties.getRedisScanBatchSize()));
+        // 创建 TenantRedisCacheManager 对象
+        return new TimeoutRedisCacheManager(cacheWriter, redisCacheConfiguration);
+    }
+}
+```
+
+在设置过期时间的时候，在注解中使用方法是：@Cacheable(cacheNames = "name#**过期时间**", key = "key")。具体的处理方式就是在按照 # 符号分割，按照：**d h m s **来区分**天、小时、分钟、秒**时间单位。
+
+```java
+public class TimeoutRedisCacheManager extends RedisCacheManager {
+    private static final String SPLIT = "#";
+    public TimeoutRedisCacheManager(RedisCacheWriter cacheWriter, RedisCacheConfiguration defaultCacheConfiguration) {
+        super(cacheWriter, defaultCacheConfiguration);
+    }
+
+    @Override
+    protected RedisCache createRedisCache(String name, RedisCacheConfiguration cacheConfig) {
+        if (StrUtil.isEmpty(name)) {
+            return super.createRedisCache(name, cacheConfig);
+        }
+        // 如果使用 # 分隔，大小不为 2，则说明不使用自定义过期时间
+        String[] names = StrUtil.splitToArray(name, SPLIT);
+        if (names.length != 2) {
+            return super.createRedisCache(name, cacheConfig);
+        }
+        // 核心：通过修改 cacheConfig 的过期时间，实现自定义过期时间
+        if (cacheConfig != null) {
+            // 移除 # 后面的 : 以及后面的内容，避免影响解析
+            String ttlStr = StrUtil.subBefore(names[1], StrUtil.COLON, false); // 获得 ttlStr 时间部分
+            names[1] = StrUtil.subAfter(names[1], ttlStr, false); // 移除掉 ttlStr 时间部分
+            // 解析时间
+            Duration duration = parseDuration(ttlStr);
+            cacheConfig = cacheConfig.entryTtl(duration);
+        }
+        // 创建 RedisCache 对象，需要忽略掉 ttlStr
+        return super.createRedisCache(names[0] + names[1], cacheConfig);
+    }
+
+    /**
+     * 解析过期时间 Duration
+     *
+     * @param ttlStr 过期时间字符串
+     * @return 过期时间 Duration
+     */
+    private Duration parseDuration(String ttlStr) {
+        String timeUnit = StrUtil.subSuf(ttlStr, -1);
+        switch (timeUnit) {
+            case "d":
+                return Duration.ofDays(removeDurationSuffix(ttlStr));
+            case "h":
+                return Duration.ofHours(removeDurationSuffix(ttlStr));
+            case "m":
+                return Duration.ofMinutes(removeDurationSuffix(ttlStr));
+            case "s":
+                return Duration.ofSeconds(removeDurationSuffix(ttlStr));
+            default:
+                return Duration.ofSeconds(Long.parseLong(ttlStr));
+        }
+    }
+
+    /**
+     * 移除多余的后缀，返回具体的时间
+     *
+     * @param ttlStr 过期时间字符串
+     * @return 时间
+     */
+    private Long removeDurationSuffix(String ttlStr) {
+        return NumberUtil.parseLong(StrUtil.sub(ttlStr, 0, ttlStr.length() - 1));
+    }
+}
+```
 
 
 
