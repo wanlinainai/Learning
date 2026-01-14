@@ -1191,9 +1191,100 @@ public class TimeoutRedisCacheManager extends RedisCacheManager {
 }
 ```
 
+#### 如何实现租户通用功能的处理
 
+比如如果我们需要记录每一个租户的日志操作，或者是交易订单的自动过期。这种通用操作可以一个租户调用，所有租户都执行一次。因为是通用组件。
 
+我们还是使用AOP，戒奢从简，定义一个注解：**@TenantJob**。
 
+在**YudaoTenantAutoConfiguration**类中，按需导入这个注解的切面类：
+
+```java
+    @Bean
+    @ConditionalOnClass(name = "com.xxl.job.core.handler.annotation.XxlJob")
+    public TenantJobAspect tenantJobAspect(TenantFrameworkService tenantFrameworkService) {
+        return new TenantJobAspect(tenantFrameworkService);
+    }
+```
+
+接下来是切面类：
+
+```java
+@Aspect
+@RequiredArgsConstructor
+@Slf4j
+public class TenantJobAspect {
+    private final TenantFrameworkService tenantFrameworkService;
+    @Around("@annotation(tenantJob)")
+    public void around(ProceedingJoinPoint joinPoint, TenantJob tenantJob) {
+        // 获得租户列表
+        List<Long> tenantIds = tenantFrameworkService.getTenantIds();
+        if (CollUtil.isEmpty(tenantIds)) {
+            return;
+        }
+        // 逐个租户，执行 Job
+        Map<Long, String> results = new ConcurrentHashMap<>();
+        AtomicBoolean success = new AtomicBoolean(true); // 标记，是否存在失败的情况
+        XxlJobContext xxlJobContext = XxlJobContext.getXxlJobContext(); // XXL-Job 上下文
+        tenantIds.parallelStream().forEach(tenantId -> {
+            // TODO 芋艿：先通过 parallel 实现并行；1）多个租户，是一条执行日志；2）异常的情况
+            TenantUtils.execute(tenantId, () -> {
+                try {
+                    // 将父线程的 Context 塞到子线程
+                    XxlJobContext.setXxlJobContext(xxlJobContext);
+                    // 执行 Job
+                    Object result = joinPoint.proceed();
+                    results.put(tenantId, StrUtil.toStringOrEmpty(result));
+                } catch (Throwable e) {
+                    results.put(tenantId, ExceptionUtil.getRootCauseMessage(e));
+                    success.set(false);
+                    // 打印异常
+                    XxlJobHelper.log(StrUtil.format("[多租户({}) 执行任务({})，发生异常：{}]",
+                            tenantId, joinPoint.getSignature(), ExceptionUtils.getStackTrace(e)));
+                }
+            });
+        });
+        // 记录执行结果
+        if (success.get()) {
+            XxlJobHelper.handleSuccess(JsonUtils.toJsonString(results));
+        } else {
+            XxlJobHelper.handleFail(JsonUtils.toJsonString(results));
+        }
+    }
+}
+```
+
+> 解释一下这个切面类在做什么？首先其中一个租户执行了一个定时任务，
+>
+> `List<Long> tenantIds = tenantFrameworkService.getTenantIds();`获取到租户列表，如果没有租户，直接快速返回。
+>
+> 拿到每一个租户ID之后，使用`parallelStream`来并行执行任务，在这个并行处理的任务中，`TenantUtils.execute`可以将租户id设置到ThreadLocal中，`XxlJobContext.setXxlJobContext(xxlJobContext);`的作用是什么呢？**拿到主线程设置的xxl-job的上下文之后使用XxlJobHelper.log不会报错**。之后执行定时任务的方法，返回结果。如果其中有任何一个租户操作出现问题，我们会记录这个错误，并将这个success属性设置成false。用原子类的原因就是因为不要因为多线程引发错误。
+
+顺便看看**TenantUtils**工具类的`execute`方法:
+
+```java
+    public static void execute(Long tenantId, Runnable runnable) {
+        Long oldTenantId = TenantContextHolder.getTenantId();
+        Boolean oldIgnore = TenantContextHolder.isIgnore();
+        try {
+            TenantContextHolder.setTenantId(tenantId);
+            TenantContextHolder.setIgnore(false);
+            // 执行逻辑
+            runnable.run();
+        } finally {
+            TenantContextHolder.setTenantId(oldTenantId);
+            TenantContextHolder.setIgnore(oldIgnore);
+        }
+    }
+```
+
+> 扩展：XxlJobContext类
+>
+> 这个类最主要的就是一个`InheritableThreadLocal`类。![image-20260115004007568](images/yudao/image-20260115004007568.png)
+>
+> `InheritableThreadLocal`类主要就是处理ThreadLocal中父子线程不能共享数据的问题的。
+>
+> 这个类主要就是通过一个变量`inheritableThreadLocals`之后将这个变量映射到子线程的inheritableThreadLocals中。
 
 
 
