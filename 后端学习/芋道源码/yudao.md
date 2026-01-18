@@ -1288,7 +1288,141 @@ public class TenantJobAspect {
 
 
 
+## MyBatis-Plus扩展
 
+我们在整个项目设置是时候设置了多个数据源，需要支持MySQL、Oracle、postgresql、SQLServer等数据库。同时我们项目引入了MyBatis-Plus，但是对于不同的数据源配置项略有不同。
+
+在server配置中我们设置了id-type = NONE，意味着我们需要动态设置对应的数据源类型主键。
+
+我们在配置文件中已经设置了
+
+```yaml
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true # 虽然默认为 true ，但是还是显示去指定下。
+  global-config:
+    db-config:
+      id-type: NONE # “智能”模式，基于 IdTypeEnvironmentPostProcessor + 数据源的类型，自动适配成 AUTO、INPUT 模式。
+      #      id-type: AUTO # 自增 ID，适合 MySQL 等直接自增的数据库
+      #      id-type: INPUT # 用户输入 ID，适合 Oracle、PostgreSQL、Kingbase、DB2、H2 数据库
+      #      id-type: ASSIGN_ID # 分配 ID，默认使用雪花算法。注意，Oracle、PostgreSQL、Kingbase、DB2、H2 数据库时，需要去除实体类上的 @KeySequence 注解
+      logic-delete-value: 1 # 逻辑已删除值(默认为 1)
+      logic-not-delete-value: 0 # 逻辑未删除值(默认为 0)
+    banner: false # 关闭控制台的 Banner 打印
+  type-aliases-package: ${yudao.info.base-package}.dal.dataobject
+  encryptor:
+    password: XDV71a+xqStEA3WH # 加解密的秘钥，可使用 https://www.imaegoo.com/2020/aes-key-generator/ 网站生成
+```
+
+设置的NONE。如果是MySQL的话我们需要设置的是自增主键：**id-type: AUTO**。如果是其他数据库的话我们需要自己设置主键：**id-type: INPUT**。我们希望在项目启动的时候就设置上，还是借助于：**EnvironmentPostProcessor**接口。
+
+我们在配置文件中设置不同的数据源的方式大差不差：
+
+```yaml
+      datasource:
+        master:
+          url: jdbc:mysql://82.156.189.254:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          #url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
+          #url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
+          #url: jdbc:sqlserver://127.0.0.1:1433;DatabaseName=ruoyi-vue-pro;SelectMethod=cursor;encrypt=false;rewriteBatchedStatements=true;useUnicode=true;characterEncoding=utf-8 # SQLServer 连接的示例
+```
+
+可以通过mybatisplus获取到具体的连接的DBType。`**com.baomidou.mybatisplus.extension.toolkit.JdbcUtils.getDbType(url)**`。根据DBType设置不同的**id-type**属性。代码如下：
+
+```java
+public class IdTypeEnvironmentPostProcessor implements EnvironmentPostProcessor {
+    private static final String ID_TYPE_KEY = "mybatis-plus.global-config.db-config.id-type";
+    private static final String DATASOURCE_DYNAMIC_KEY = "spring.datasource.dynamic";
+    private static final String QUARTZ_JOB_STORE_DRIVER_KEY = "spring.quartz.properties.org.quartz.jobStore.driverDelegateClass";
+    private static final Set<DbType> INPUT_ID_TYPES = SetUtils.asSet(DbType.ORACLE, DbType.ORACLE_12C,
+            DbType.POSTGRE_SQL, DbType.KINGBASE_ES, DbType.DB2, DbType.H2);
+
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        // 如果获取不到 DbType，则不进行处理
+        DbType dbType = getDbType(environment);
+        if (dbType == null) {
+            return;
+        }
+        // 设置 Quartz JobStore 对应的 Driver
+        // TODO 芋艿：暂时没有找到特别合适的地方，先放在这里
+        setJobStoreDriverIfPresent(environment, dbType);
+
+        // 如果非 NONE，则不进行处理
+        IdType idType = getIdType(environment);
+        if (idType != IdType.NONE) {
+            return;
+        }
+        // 情况一，用户输入 ID，适合 Oracle、PostgreSQL、Kingbase、DB2、H2 数据库
+        if (INPUT_ID_TYPES.contains(dbType)) {
+            setIdType(environment, IdType.INPUT);
+            return;
+        }
+        // 情况二，自增 ID，适合 MySQL、DM 达梦等直接自增的数据库
+        setIdType(environment, IdType.AUTO);
+    }
+
+    public IdType getIdType(ConfigurableEnvironment environment) {
+        String value = environment.getProperty(ID_TYPE_KEY);
+        try {
+            return StrUtil.isNotBlank(value) ? IdType.valueOf(value) : IdType.NONE;
+        } catch (IllegalArgumentException ex) {
+            log.error("[getIdType][无法解析 id-type 配置值({})]", value, ex);
+            return IdType.NONE;
+        }
+    }
+
+    public void setIdType(ConfigurableEnvironment environment, IdType idType) {
+        Map<String, Object> map = new HashMap<>();
+        map.put(ID_TYPE_KEY, idType);
+        environment.getPropertySources().addFirst(new MapPropertySource("mybatisPlusIdType", map));
+        log.info("[setIdType][修改 MyBatis Plus 的 idType 为({})]", idType);
+    }
+
+    public void setJobStoreDriverIfPresent(ConfigurableEnvironment environment, DbType dbType) {
+        String driverClass = environment.getProperty(QUARTZ_JOB_STORE_DRIVER_KEY);
+        if (StrUtil.isNotEmpty(driverClass)) {
+            return;
+        }
+        // 根据 dbType 类型，获取对应的 driverClass
+        switch (dbType) {
+            case POSTGRE_SQL:
+                driverClass = "org.quartz.impl.jdbcjobstore.PostgreSQLDelegate";
+                break;
+            case ORACLE:
+            case ORACLE_12C:
+                driverClass = "org.quartz.impl.jdbcjobstore.oracle.OracleDelegate";
+                break;
+            case SQL_SERVER:
+            case SQL_SERVER2005:
+                driverClass = "org.quartz.impl.jdbcjobstore.MSSQLDelegate";
+                break;
+            case DM:
+            case KINGBASE_ES:
+                driverClass = "org.quartz.impl.jdbcjobstore.StdJDBCDelegate";
+                break;
+        }
+        // 设置 driverClass 变量
+        if (StrUtil.isNotEmpty(driverClass)) {
+            environment.getSystemProperties().put(QUARTZ_JOB_STORE_DRIVER_KEY, driverClass);
+        }
+    }
+
+    public static DbType getDbType(ConfigurableEnvironment environment) {
+        String primary = environment.getProperty(DATASOURCE_DYNAMIC_KEY + "." + "primary");
+        if (StrUtil.isEmpty(primary)) {
+            return null;
+        }
+        String url = environment.getProperty(DATASOURCE_DYNAMIC_KEY + ".datasource." + primary + ".url");
+        if (StrUtil.isEmpty(url)) {
+            return null;
+        }
+        return JdbcUtils.getDbType(url);
+    }
+}
+```
+
+这段代码中还存在了一部分与定时任务相关的代码设置环境变量内容，**setJobStoreDriverIfPresent**方法中首先获取**spring.quartz.properties.org.quartz.jobStore.driverDelegateClass**的内容，如果不为空的话优先设置用户在配置文件设置的内容，但是如果是空的话会根据不同的数据源类型设置不同的配置类。PGSQL设置的是：**org.quartz.impl.jdbcjobstore.PostgreSQLDelegate**，其他的类似。最终在启动完成之后会将正在使用的数据源设置到相应部分。
 
 
 
