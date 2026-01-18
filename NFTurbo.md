@@ -2647,6 +2647,320 @@ public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>()
 
 
 
+#### 责任链模式
+
+行为设计模式，可以通过将一系列处理器按照顺序连接起来，使得每一个处理器都有机会处理请求，实现请求的传递和处理。
+
+在我们的项目中，通过责任链模式实现订单下单时的各种前置校验。
+
+先定义一个接口，其中定义几个方法：
+
+```java
+public interface OrderCreateValidator {
+    /**
+     * 设置下一个校验器
+     *
+     * @param nextValidator
+     */
+    public void setNext(OrderCreateValidator nextValidator);
+
+    /**
+     * 返回下一个校验器
+     *
+     * @return
+     */
+    public OrderCreateValidator getNext();
+
+    /**
+     * 校验
+     *
+     * @param request
+     * @throws OrderException 订单异常
+     */
+    public void validate(OrderCreateRequest request) throws OrderException;
+}
+```
+
+接下来是三个校验器：
+
+**UserValidator（用户校验器）、StockValidator（库存校验器）、GoodsValidator（商品校验器）**
+
+```java
+public class UserValidator extends BaseOrderCreateValidator {
+    private UserFacadeService userFacadeService;
+    @Override
+    public void doValidate(OrderCreateRequest request) throws OrderException {
+        String buyerId = request.getBuyerId();
+        UserQueryRequest userQueryRequest = new UserQueryRequest(Long.valueOf(buyerId));
+        UserQueryResponse<UserInfo> userQueryResponse = userFacadeService.query(userQueryRequest);
+        if (userQueryResponse.getSuccess() && userQueryResponse.getData() != null) {
+            UserInfo userInfo = userQueryResponse.getData();
+            if (userInfo.getUserRole() != null && !userInfo.getUserRole().equals(UserRole.CUSTOMER)) {
+                throw new OrderException(BUYER_IS_PLATFORM_USER);
+            }
+            //判断买家状态
+            if (userInfo.getState() != null && !userInfo.getState().equals(UserStateEnum.ACTIVE.name())) {
+                throw new OrderException(BUYER_STATUS_ABNORMAL);
+            }
+            //判断买家状态
+            if (userInfo.getState() != null && !userInfo.getCertification()) {
+                throw new OrderException(BUYER_NOT_AUTH);
+            }
+        }
+    }
+    public UserValidator(UserFacadeService userFacadeService) {
+        this.userFacadeService = userFacadeService;
+    }
+    public UserValidator() {
+    }
+}
+```
+
+```java
+public class StockValidator extends BaseOrderCreateValidator {
+
+    private InventoryFacadeService inventoryFacadeService;
+
+    @Override
+    public void doValidate(OrderCreateRequest request) throws OrderException {
+
+        InventoryRequest inventoryRequest = new InventoryRequest();
+        inventoryRequest.setGoodsId(request.getGoodsId());
+        inventoryRequest.setGoodsType(request.getGoodsType());
+        inventoryRequest.setIdentifier(request.getIdentifier());
+        inventoryRequest.setInventory(request.getItemCount());
+
+        SingleResponse<Integer> response = inventoryFacadeService.queryInventory(inventoryRequest);
+
+        if (!response.getSuccess()) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+
+        Integer inventory = response.getData();
+
+        if (inventory == 0) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+
+        if (inventory < request.getItemCount()) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+    }
+
+    public StockValidator(InventoryFacadeService inventoryFacadeService) {
+        this.inventoryFacadeService = inventoryFacadeService;
+    }
+
+    public StockValidator() {
+    }
+}
+```
+
+```java
+public class GoodsValidator extends BaseOrderCreateValidator {
+
+    private GoodsFacadeService goodsFacadeService;
+
+    @Override
+    protected void doValidate(OrderCreateRequest request) throws OrderException {
+        BaseGoodsVO baseGoodsVO = goodsFacadeService.getGoods(request.getGoodsId(), request.getGoodsType());
+
+        // 如果商品不是可售状态，则返回失败
+        // PS：可售状态为什么要包含SOLD_OUT呢？因为商品查询的接口中去查询了 Redis 的最新库存，而 Redis 的库存在下单时可能已经扣减过刚好为0了，所以这里要包含 SOLD_OUT
+        if (baseGoodsVO.getState() != GoodsState.SELLING && baseGoodsVO.getState() != GoodsState.SOLD_OUT) {
+            throw new OrderException(GOODS_NOT_AVAILABLE);
+        }
+
+        if (baseGoodsVO.getPrice().compareTo(request.getItemPrice()) != 0) {
+            throw new OrderException(GOODS_PRICE_CHANGED);
+        }
+    }
+
+    public GoodsValidator(GoodsFacadeService goodsFacadeService) {
+        this.goodsFacadeService = goodsFacadeService;
+    }
+
+    public GoodsValidator() {
+    }
+}
+```
+
+上述分别实现了用户、库存、商品的校验，每一个校验器只需要关心自己的相关校验逻辑。如果需要有更多的校验器，只需要继续添加校验器即可。
+
+之后需要将这三个校验器进行编织。
+
+```java
+@Configuration
+public class OrderClientConfiguration {
+    /**
+     * @param goodsFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public GoodsValidator goodsValidator(GoodsFacadeService goodsFacadeService) {
+        return new GoodsValidator(goodsFacadeService);
+    }
+
+    /**
+     * @param inventoryFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public StockValidator stockValidator(InventoryFacadeService inventoryFacadeService) {
+        return new StockValidator(inventoryFacadeService);
+    }
+
+    /**
+     * @param userFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public UserValidator userValidator(UserFacadeService userFacadeService) {
+        return new UserValidator(userFacadeService);
+    }
+
+    /**
+     * @param goodsFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public GoodsBookValidator goodsBookValidator(GoodsFacadeService goodsFacadeService) {
+        return new GoodsBookValidator(goodsFacadeService);
+    }
+
+    @Bean
+    public OrderCreateValidator orderValidatorChain(UserValidator userValidator, GoodsValidator goodsValidator, GoodsBookValidator goodsBookValidator) {
+        userValidator.setNext(goodsValidator);
+        goodsValidator.setNext(goodsBookValidator);
+        return userValidator;
+    }
+}
+```
+
+顺序是：UserValidator ----> GoodsValidator ----> StockValidator。之后就可以在任何地方使用这个**orderValidatorChain.validate**了。
+
+```java
+    @Override
+    @DistributeLock(keyExpression = "#request.identifier", scene = "ORDER_CREATE")
+    @Facade
+    public OrderResponse create(OrderCreateRequest request) {
+        try {
+            orderValidatorChain.validate(request);
+        } catch (OrderException e) {
+            return new OrderResponse.OrderResponseBuilder().buildFail(ORDER_CREATE_VALID_FAILED.getCode(), e.getErrorCode().getMessage());
+        }
+
+        InventoryRequest inventoryRequest = new InventoryRequest(request);
+        SingleResponse<Boolean> decreaseResult = inventoryFacadeService.decrease(inventoryRequest);
+
+        if (decreaseResult.getSuccess()) {
+            return orderService.createAndAsyncConfirm(request);
+        }
+        throw new OrderException(OrderErrorCode.INVENTORY_DECREASE_FAILED);
+    }
+```
+
+##### UserValidator
+
+通过buyerId获取到用户信息，判断逻辑如下：
+
+1. 用户角色必须是`CUSTOMER`模式，不能是`ARTIST`或者`ADMIN`。如果之后需求变更的话可以删除这个限制
+2. 判断买家状态，用户状态必须是上链状态，也就是激活状态，链上必须存在这个用户信息
+3. 判断买家是否进行实名认证了
+
+出现任何问题终止流程。
+
+##### GoodsValidator
+
+通过前端传递过来的**商品id**和**商品类型**进行查询商品信息。商品类型分成两种（藏品和盲盒）。
+
+```java
+@Override
+    public BaseGoodsVO getGoods(String goodsId, GoodsType goodsType) {
+        return switch (goodsType) {
+            case COLLECTION -> {
+                SingleResponse<CollectionVO> response = collectionReadFacadeService.queryById(Long.valueOf(goodsId));
+                if (response.getSuccess()) {
+                    yield response.getData();
+                }
+                yield null;
+            }
+
+            case BLIND_BOX -> {
+                SingleResponse<BlindBoxVO> response = blindBoxReadFacadeService.queryById(Long.valueOf(goodsId));
+                if (response.getSuccess()) {
+                    yield response.getData();
+                }
+                yield null;
+            }
+            default -> throw new UnsupportedOperationException(ERROR_CODE_UNSUPPORTED_GOODS_TYPE);
+        };
+    }
+```
+
+1. 藏品流程
+
+传入商品ID(goodsId)，先去查询商品信息，查询商品信息的时候需要注意是三级缓存，本地JetCache缓存过期时间10min，Redis缓存60min，如果都没有的话去数据库查询。
+
+之后查询库存（很重要），主要就是去Redis中查询库存信息，如果查不到的话就去数据库中查询库存做兜底策略，之后返回
+
+2. 盲盒流程
+
+跟藏品流程几乎一样，拿着商品id（goodsId），查询盲盒信息，查询盲盒信息的时候依旧是缓存，兜底是数据库。之后是库存的查询操作。
+
+之后的操作：判断是否是正在售卖的状态同时判断前端传递的金额和商品价格是否相等，如果不相等就快速失败，fail-fast，符合开发规范。
+
+##### GoodsBookValidator（替换掉StockValidator），商品预定校验
+
+获取商品信息，同上**getGoods**。
+
+判断这个商品是否可以预约，属性在:**canBook**。同时我们系统是支持预定的。
+
+```java
+public class GoodsBookValidator extends BaseOrderCreateValidator {
+
+    private GoodsFacadeService goodsFacadeService;
+
+    @Override
+    protected void doValidate(OrderCreateRequest request) throws OrderException {
+        BaseGoodsVO baseGoodsVO = goodsFacadeService.getGoods(request.getGoodsId(), request.getGoodsType());
+        if(baseGoodsVO.canBook()){
+            Boolean hasBooked = goodsFacadeService.isGoodsBooked(request.getGoodsId(), request.getGoodsType(), request.getBuyerId());
+
+            if (!hasBooked) {
+                throw new OrderException(GOODS_NOT_BOOKED);
+            }
+        }
+    }
+
+    public GoodsBookValidator(GoodsFacadeService goodsFacadeService) {
+        this.goodsFacadeService = goodsFacadeService;
+    }
+
+    public GoodsBookValidator() {
+    }
+}
+```
+
+我们的预定是通过bitMap数据结构进行存储的，获取是否已经预定可以通过Redis中的bitmap进行判断。核心代码如下：
+
+```java
+    public boolean isBooked(String goodsId, GoodsType goodsType, String buyerId) {
+        RBitSet bookedUsers = redissonClient.getBitSet(BOOK_KEY + goodsType + CacheConstant.CACHE_KEY_SEPARATOR + goodsId);
+        return bookedUsers.get(Integer.parseInt(buyerId));
+    }
+```
+
+
+
+
+
+
+
 
 
 ### 藏品管理功能设计
