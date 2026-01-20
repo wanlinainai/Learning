@@ -2957,6 +2957,183 @@ public class GoodsBookValidator extends BaseOrderCreateValidator {
 
 
 
+#### 订单号生成
+
+要求：
+
+1. 不能重复
+2. 订单号不能被预测出来
+3. 如果是分库分表的话，需要友好。比如按照买家ID或者卖家ID进行分库分表，之后取模运算的话可以拿到对应的表，通过基因法的方式可以在订单号中找到对应的标识
+4. 如果有什么需要一些信息编码的话可以放到订单号中
+
+我们系统是按照三种方式进行编码的，一个是按照业务标识，比如交易订单、支付订单、退款单等（businessCode）、唯一序列号（Sequence）、表的下标（比如0001、0002、0003标识信息是存储在哪一张表中，table）。
+
+比如：`10   175982348234789237489279   0001`。
+
+回到代码中的方法：
+
+我们的分布式ID生成类是：`DistributeID`，必须的参数是：**系统标识码（businessCode）、表下表（table）、序列号（seq）**
+
+如果我们需要创建一个id，需要传入的参数有：buinessCode、externalId（用于表示卖家 买家id）、sequenceNumber（唯一id）。
+
+```java
+public enum BusinessCode {
+    /**
+     * 订单
+     */
+    TRADE_ORDER(10, 4),
+    /**
+     * 支付单
+     */
+    PAY_ORDER(11, 1),
+
+    /**
+     * 退款单
+     */
+    REFUND_ORDER(12, 1),
+
+    /**
+     * 持有藏品
+     */
+    HELD_COLLECTION(13, 1);
+    private static final int MAX_CODE = 99;
+    private static final int MIN_CODE = 10;
+    private int code;
+    private int tableCount;
+    BusinessCode(int code, int tableCount) {
+        if (code > MAX_CODE || code < MIN_CODE) {
+            throw new UnsupportedOperationException("unsupport code : " + code);
+        }
+        this.code = code;
+        this.tableCount = tableCount;
+    }
+    public int tableCount() {
+        return tableCount;
+    }
+    public int code() {
+        return code;
+    }
+    public String getCodeString() {
+        return String.valueOf(this.code);
+    }
+}
+```
+
+上述是BuinessCode枚举类，其中的第一位是标识码，第二位是表的数量。
+
+externalId是代表买家或者卖家id，作用是什么呢？就是获取对应表的下标，比如分了4个表，根据这个id对4取余获取的值就是存储的表位置。我们使用方法是通过这个id进行hashCode，之后拿到之后与表的数量取模运算之后强转成int。
+
+```java
+public class DefaultShardingTableStrategy implements ShardingTableStrategy {
+
+    public DefaultShardingTableStrategy() {
+    }
+
+    @Override
+    public int getTable(String externalId,int tableCount) {
+        int hashCode = externalId.hashCode();
+        return (int) Math.abs((long) hashCode) % tableCount;
+        //  为了性能更好，可以优化成：return (int) Math.abs((long) hashCode) & (tableCount - 1); 具体原理参考 hashmap 的 hash 方法
+    }
+}
+```
+
+拿到取模运算之后的值之后在前面拼接上0。
+
+如何拿到唯一的sequenceNumber呢？我们是直接通过雪花算法生成的，就算是有很多机器的话还是可以正常运行成功的。
+
+整体代码如下：
+
+```java
+    public static String generateWithSnowflake(BusinessCode businessCode, long workerId,
+                                               String externalId) {
+        long id = IdUtil.getSnowflake(workerId).nextId();
+        return generate(businessCode, externalId, id);
+    }
+
+    public static String generate(BusinessCode businessCode,
+                                  String externalId, Long sequenceNumber) {
+        DistributeID distributeId = create(businessCode, externalId, sequenceNumber);
+        return distributeId.businessCode + distributeId.seq + distributeId.table;
+    }
+
+    public static DistributeID create(BusinessCode businessCode,
+                                      String externalId, Long sequenceNumber) {
+
+        DistributeID distributeId = new DistributeID();
+        distributeId.businessCode = businessCode.getCodeString();
+        String table = String.valueOf(shardingTableStrategy.getTable(externalId, businessCode.tableCount()));
+        distributeId.table = StringUtils.leftPad(table, 4, "0");
+        distributeId.seq = String.valueOf(sequenceNumber);
+        return distributeId;
+    }
+```
+
+测试类：
+
+```java
+    @Test
+    public void generate() {
+        System.out.println(IdUtil.getSnowflake(BusinessCode.TRADE_ORDER.code()).nextId());
+        Assert.assertEquals(DistributeID.generate(BusinessCode.TRADE_ORDER, "6", 1769649671860822016L), "1017696496718608220160002");
+    }
+```
+
+> 回顾：我们整体的设计就是需要在订单号上加上我们业务逻辑需要的属性，比如：业务号、唯一号、对应表下标。
+
+#### 事件异步监听
+
+在订单创建之后异步执行确认，
+
+```java
+applicationContext.publishEvent(new OrderCreateEvent(tradeOrder))
+```
+
+创建OrderCreateEvent监听事件，需要继承自SpringEvent的ApplicationEvent
+
+```java
+public class OrderCreateEvent extends ApplicationEvent {
+
+    public OrderCreateEvent(TradeOrder tradeOrder) {
+        super(tradeOrder);
+    }
+}
+```
+
+![image-20260121002403916](images/NFTurbo/image-20260121002403916.png)
+
+调用super(tradeOrder)是将source设置成订单对象，重点是在接收方如何处理，处理的内容就是这个订单。
+
+之后就是监听器：
+
+```java
+@Component
+public class OrderEventListener {
+    @Autowired
+    private OrderFacadeService orderFacadeService;
+		// @Async("orderListenExecutor") 移除异步处理，本事件改为同步处理
+    // 因为在后面的压测中发现，异步处理会导致整体的订单CONFIRM延迟变长，影响用户体验，所以改为同步调用的方式，详见压测部分视频。
+    @TransactionalEventListener(value = OrderCreateEvent.class)
+    public void onApplicationEvent(OrderCreateEvent event) {
+
+        TradeOrder tradeOrder = (TradeOrder) event.getSource();
+        OrderConfirmRequest confirmRequest = new OrderConfirmRequest();
+        confirmRequest.setOperator(UserType.PLATFORM.name());
+        confirmRequest.setOperatorType(UserType.PLATFORM);
+        confirmRequest.setOrderId(tradeOrder.getOrderId());
+        confirmRequest.setIdentifier(tradeOrder.getIdentifier());
+        confirmRequest.setOperateTime(new Date());
+        confirmRequest.setBuyerId(tradeOrder.getBuyerId());
+        confirmRequest.setItemCount(tradeOrder.getItemCount());
+        confirmRequest.setGoodsType(tradeOrder.getGoodsType());
+        confirmRequest.setGoodsId(tradeOrder.getGoodsId());
+        orderFacadeService.confirm(confirmRequest);
+    }
+}
+```
+
+> 使用@TransactionalEventListener注解原因是需要等到主任务事务commit之后执行，在Return之后监听事件监听到事务正常成功才会执行。
+
 
 
 
