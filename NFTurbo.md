@@ -3134,9 +3134,172 @@ public class OrderEventListener {
 
 > 使用@TransactionalEventListener注解原因是需要等到主任务事务commit之后执行，在Return之后监听事件监听到事务正常成功才会执行。
 
+#### 分库分表
 
+**分表**：分表的数量一般是按照数据的存量、数据每天的增量、预计业务数据量持续时间来综合评估的，一般来说数据库在达到数据量2000万的时候会出现性能瓶颈，尽可能每一个表的数据量维持在2000万以下。
 
+有一个计算公式：`分表数量 = (存量的数据量 + 每年新增数据量 * 预期保存的年数) / 2000万 ，之后向上取2的幂所在数`，比如存量数据2000万，每年增量1000万，保存20年。即为`(2000 + 1000 * 2) / 2000 = 11 ====>16`，最后分表就是16。
 
+分表字段的选择一般是根据买家id或者卖家id，由于我们的ID也是经过设计的，参考上面的订单号生成，可以根据订单号快速的获取到对应素具所在表。
+
+分表的算法采用的是hash 之后取模的算法，针对买家id进行取模运算，之后对总分表数取模。如果想要更好的性能以及扩展，可以考虑在hashcode计算之后的获取的时候将取模运算换成按位与运算。这也是为什么采用2的幂来计算表数量的原因。
+
+```java
+public class DefaultShardingTableStrategy implements ShardingTableStrategy {
+  public DefaultShardingTableStrategy(){
+  }
+  
+  @Overide
+  public int getTable(String externalId, int tableCount) {
+    int hashCode = externalId.hashCode();
+    return (int)(Math.abs((long) hashCode) % tableCount);
+    // return (int)(Math.abs((long) hashCode) & (tableCount - 1));
+  }
+}
+```
+
+**分库分表框架**：ShardingJDBC
+
+##### 分库分表配置
+
+```yaml
+spring:
+	shardingsphere:
+		rules:
+			sharding:
+				tables:
+          trade_order:
+            actual-data-nodes: ds.trade_order_000${0..3}
+            keyGenerateStrategy:
+              column: id
+              keyGeneratorName: snowflake
+            table-strategy:
+              complex:
+                shardingColumns: buyer_id,order_id
+                shardingAlgorithmName: trade-order-sharding
+          trade_order_stream:
+            actual-data-nodes: ds.trade_order_stream_000${0..3}
+            keyGenerateStrategy:
+              column: id
+              keyGeneratorName: snowflake
+            table-strategy:
+              complex:
+                shardingColumns: buyer_id,order_id
+                shardingAlgorithmName: trade-order-sharding
+        shardingAlgorithms:
+#          t-order-inline:
+#            type: INLINE
+#            props:
+#              algorithm-expression: trade_order_0${Math.abs(buyer_id.hashCode()) % 4}
+          trade-order-sharding:
+            type: CLASS_BASED
+            props:
+              algorithmClassName: cn.hollis.nft.turbo.order.infrastructure.sharding.algorithm.TurboKeyShardingAlgorithm
+              strategy: complex
+              tableCount: 4
+              mainColum: buyer_id
+        keyGenerators:
+          snowflake:
+            type: SNOWFLAKE
+        auditors:
+          sharding_key_required_auditor:
+            type: DML_SHARDING_CONDITIONS
+
+```
+
+可以看到在`tables`属性中存在`trade_order`订单表和`trade_order_stream`订单流水表。
+
+- `actual-data-nodes`:实际的物理节点，`ds.trade_order_000${0...3}`指的是存在4个分片，从0000 到 00003。
+- `keyGenerateStrategy`：主键生成策略。
+- `table-strategy`：分表策略。这里我们使用的是自定义的分表策略。
+
+**分片算法**
+
+使用的type是：`CLASS_BASED`表示使用class类。具体的实现类是`TurboKeyShardingAlgorithm`。分片策略（strategy）是`complex`。`tableCount`是4，这个是我们自定义的，用于算法的实现。`mainColumn`分片列，这个是我们自己定义的。
+
+接下来看看最主要的这个算法类的实现方式。
+
+实现实现ComplexKeysShardingAlgorithm和HintShardingAlgorithm，一个是用来处理复杂的SQL中的三种不同情况的（1. 只有buyer_id、order_id、两者兼备），另一个是用来处理用到了Hint的话可以忽略SQL内容。
+
+核心方法：`doSharding`
+
+```java
+@Override
+    public Collection<String> doSharding(Collection<String> availableTargetNames, ComplexKeysShardingValue<String> complexKeysShardingValue) {
+        Collection<String> result = new HashSet<>();
+
+        // 获取主要列，就是buyer_id
+        String mainColum = props.getProperty(PROP_MAIN_COLUM);
+        // 获取分片键的值
+        Collection<String> mainColums = complexKeysShardingValue.getColumnNameAndShardingValuesMap().get(mainColum);
+
+        if (CollectionUtils.isNotEmpty(mainColums)) {
+            // 如果存在主要列的话也就是buyer_id，会按照这个buyer_id进行分片，走的就是之前在 DistributeID 类中的使用基因法生成的表索引
+            for (String colum : mainColums) {
+                String shardingTarget = calculateShardingTarget(colum);
+                result.add(shardingTarget);
+            }
+            return getMatchedTables(result, availableTargetNames);
+        }
+
+        complexKeysShardingValue.getColumnNameAndShardingValuesMap().remove(mainColum);
+        Collection<String> otherColums = complexKeysShardingValue.getColumnNameAndShardingValuesMap().keySet();
+        // 如果没有buyer_id，也就是只有orderId，会按照orderId进行分片，由于我们的orderId生成的时候已经按照逻辑进行了单独的设计（业务号 + 雪花算法生成的ID + 表索引）
+        if (CollectionUtils.isNotEmpty(otherColums)) {
+            for (String colum : otherColums) {
+                Collection<String> otherColumValues = complexKeysShardingValue.getColumnNameAndShardingValuesMap().get(colum);
+                for (String value : otherColumValues) {
+                    String shardingTarget = extractShardingTarget(value);
+                    result.add(shardingTarget);
+                }
+            }
+            return getMatchedTables(result, availableTargetNames);
+        }
+
+        return null;
+    }
+```
+
+拿到对应表的名称之后 shardingsphere 会自动将原本的表结构进行拼接成对应的表名。
+
+> 其中使用buyer_id的时候进行的分片处理核心逻辑还是：
+>
+> ```java
+> @Override
+>     public int getTable(String externalId,int tableCount) {
+>         int hashCode = externalId.hashCode();
+>         return (int) Math.abs((long) hashCode) % tableCount;
+>         //  为了性能更好，可以优化成：return (int) Math.abs((long) hashCode) & (tableCount - 1); 具体原理参考 hashmap 的 hash 方法
+>     }
+> ```
+>
+> 获取到区域获取到的下标，之后在前边拼接000。结果是0001，之后就可以进行返回了。
+>
+> 如果是order_id的话，拿到整个order_id进行拆分，前两位 + 除了后四位中间的 + 后四位。
+>
+> ```java
+> public static DistributeID valueOf(String id) {
+>         DistributeID distributeId = new DistributeID();
+>         distributeId.businessCode = id.substring(0, 2);
+>         distributeId.seq = id.substring(2, id.length() - 4);
+>         distributeId.table = id.substring(id.length() - 4, id.length());
+>         return distributeId;
+>     }
+> ```
+>
+> 之后从`DistributeID`取出table属性即可。
+>
+> 之后将拿到的0001与可获取的表的后缀相同的名称返回。
+>
+> ```java
+> private Collection<String> getMatchedTables(Collection<String> results, Collection<String> availableTargetNames) {
+>         Collection<String> matchedTables = new HashSet<>();
+>         for (String result : results) {
+>             matchedTables.addAll(availableTargetNames.parallelStream().filter(each -> each.endsWith(result)).collect(Collectors.toSet()));
+>         }
+>         return matchedTables;
+>     }
+> ```
 
 
 
