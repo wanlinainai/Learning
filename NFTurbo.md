@@ -2647,6 +2647,660 @@ public static final ThreadLocal<String> TOKEN_THREAD_LOCAL = new ThreadLocal<>()
 
 
 
+#### 责任链模式
+
+行为设计模式，可以通过将一系列处理器按照顺序连接起来，使得每一个处理器都有机会处理请求，实现请求的传递和处理。
+
+在我们的项目中，通过责任链模式实现订单下单时的各种前置校验。
+
+先定义一个接口，其中定义几个方法：
+
+```java
+public interface OrderCreateValidator {
+    /**
+     * 设置下一个校验器
+     *
+     * @param nextValidator
+     */
+    public void setNext(OrderCreateValidator nextValidator);
+
+    /**
+     * 返回下一个校验器
+     *
+     * @return
+     */
+    public OrderCreateValidator getNext();
+
+    /**
+     * 校验
+     *
+     * @param request
+     * @throws OrderException 订单异常
+     */
+    public void validate(OrderCreateRequest request) throws OrderException;
+}
+```
+
+接下来是三个校验器：
+
+**UserValidator（用户校验器）、StockValidator（库存校验器）、GoodsValidator（商品校验器）**
+
+```java
+public class UserValidator extends BaseOrderCreateValidator {
+    private UserFacadeService userFacadeService;
+    @Override
+    public void doValidate(OrderCreateRequest request) throws OrderException {
+        String buyerId = request.getBuyerId();
+        UserQueryRequest userQueryRequest = new UserQueryRequest(Long.valueOf(buyerId));
+        UserQueryResponse<UserInfo> userQueryResponse = userFacadeService.query(userQueryRequest);
+        if (userQueryResponse.getSuccess() && userQueryResponse.getData() != null) {
+            UserInfo userInfo = userQueryResponse.getData();
+            if (userInfo.getUserRole() != null && !userInfo.getUserRole().equals(UserRole.CUSTOMER)) {
+                throw new OrderException(BUYER_IS_PLATFORM_USER);
+            }
+            //判断买家状态
+            if (userInfo.getState() != null && !userInfo.getState().equals(UserStateEnum.ACTIVE.name())) {
+                throw new OrderException(BUYER_STATUS_ABNORMAL);
+            }
+            //判断买家状态
+            if (userInfo.getState() != null && !userInfo.getCertification()) {
+                throw new OrderException(BUYER_NOT_AUTH);
+            }
+        }
+    }
+    public UserValidator(UserFacadeService userFacadeService) {
+        this.userFacadeService = userFacadeService;
+    }
+    public UserValidator() {
+    }
+}
+```
+
+```java
+public class StockValidator extends BaseOrderCreateValidator {
+
+    private InventoryFacadeService inventoryFacadeService;
+
+    @Override
+    public void doValidate(OrderCreateRequest request) throws OrderException {
+
+        InventoryRequest inventoryRequest = new InventoryRequest();
+        inventoryRequest.setGoodsId(request.getGoodsId());
+        inventoryRequest.setGoodsType(request.getGoodsType());
+        inventoryRequest.setIdentifier(request.getIdentifier());
+        inventoryRequest.setInventory(request.getItemCount());
+
+        SingleResponse<Integer> response = inventoryFacadeService.queryInventory(inventoryRequest);
+
+        if (!response.getSuccess()) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+
+        Integer inventory = response.getData();
+
+        if (inventory == 0) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+
+        if (inventory < request.getItemCount()) {
+            throw new OrderException(INVENTORY_NOT_ENOUGH);
+        }
+    }
+
+    public StockValidator(InventoryFacadeService inventoryFacadeService) {
+        this.inventoryFacadeService = inventoryFacadeService;
+    }
+
+    public StockValidator() {
+    }
+}
+```
+
+```java
+public class GoodsValidator extends BaseOrderCreateValidator {
+
+    private GoodsFacadeService goodsFacadeService;
+
+    @Override
+    protected void doValidate(OrderCreateRequest request) throws OrderException {
+        BaseGoodsVO baseGoodsVO = goodsFacadeService.getGoods(request.getGoodsId(), request.getGoodsType());
+
+        // 如果商品不是可售状态，则返回失败
+        // PS：可售状态为什么要包含SOLD_OUT呢？因为商品查询的接口中去查询了 Redis 的最新库存，而 Redis 的库存在下单时可能已经扣减过刚好为0了，所以这里要包含 SOLD_OUT
+        if (baseGoodsVO.getState() != GoodsState.SELLING && baseGoodsVO.getState() != GoodsState.SOLD_OUT) {
+            throw new OrderException(GOODS_NOT_AVAILABLE);
+        }
+
+        if (baseGoodsVO.getPrice().compareTo(request.getItemPrice()) != 0) {
+            throw new OrderException(GOODS_PRICE_CHANGED);
+        }
+    }
+
+    public GoodsValidator(GoodsFacadeService goodsFacadeService) {
+        this.goodsFacadeService = goodsFacadeService;
+    }
+
+    public GoodsValidator() {
+    }
+}
+```
+
+上述分别实现了用户、库存、商品的校验，每一个校验器只需要关心自己的相关校验逻辑。如果需要有更多的校验器，只需要继续添加校验器即可。
+
+之后需要将这三个校验器进行编织。
+
+```java
+@Configuration
+public class OrderClientConfiguration {
+    /**
+     * @param goodsFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public GoodsValidator goodsValidator(GoodsFacadeService goodsFacadeService) {
+        return new GoodsValidator(goodsFacadeService);
+    }
+
+    /**
+     * @param inventoryFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public StockValidator stockValidator(InventoryFacadeService inventoryFacadeService) {
+        return new StockValidator(inventoryFacadeService);
+    }
+
+    /**
+     * @param userFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public UserValidator userValidator(UserFacadeService userFacadeService) {
+        return new UserValidator(userFacadeService);
+    }
+
+    /**
+     * @param goodsFacadeService
+     * @return
+     */
+    @Bean
+    @Scope(value = BeanDefinition.SCOPE_PROTOTYPE)
+    public GoodsBookValidator goodsBookValidator(GoodsFacadeService goodsFacadeService) {
+        return new GoodsBookValidator(goodsFacadeService);
+    }
+
+    @Bean
+    public OrderCreateValidator orderValidatorChain(UserValidator userValidator, GoodsValidator goodsValidator, GoodsBookValidator goodsBookValidator) {
+        userValidator.setNext(goodsValidator);
+        goodsValidator.setNext(goodsBookValidator);
+        return userValidator;
+    }
+}
+```
+
+顺序是：UserValidator ----> GoodsValidator ----> StockValidator。之后就可以在任何地方使用这个**orderValidatorChain.validate**了。
+
+```java
+    @Override
+    @DistributeLock(keyExpression = "#request.identifier", scene = "ORDER_CREATE")
+    @Facade
+    public OrderResponse create(OrderCreateRequest request) {
+        try {
+            orderValidatorChain.validate(request);
+        } catch (OrderException e) {
+            return new OrderResponse.OrderResponseBuilder().buildFail(ORDER_CREATE_VALID_FAILED.getCode(), e.getErrorCode().getMessage());
+        }
+
+        InventoryRequest inventoryRequest = new InventoryRequest(request);
+        SingleResponse<Boolean> decreaseResult = inventoryFacadeService.decrease(inventoryRequest);
+
+        if (decreaseResult.getSuccess()) {
+            return orderService.createAndAsyncConfirm(request);
+        }
+        throw new OrderException(OrderErrorCode.INVENTORY_DECREASE_FAILED);
+    }
+```
+
+##### UserValidator
+
+通过buyerId获取到用户信息，判断逻辑如下：
+
+1. 用户角色必须是`CUSTOMER`模式，不能是`ARTIST`或者`ADMIN`。如果之后需求变更的话可以删除这个限制
+2. 判断买家状态，用户状态必须是上链状态，也就是激活状态，链上必须存在这个用户信息
+3. 判断买家是否进行实名认证了
+
+出现任何问题终止流程。
+
+##### GoodsValidator
+
+通过前端传递过来的**商品id**和**商品类型**进行查询商品信息。商品类型分成两种（藏品和盲盒）。
+
+```java
+@Override
+    public BaseGoodsVO getGoods(String goodsId, GoodsType goodsType) {
+        return switch (goodsType) {
+            case COLLECTION -> {
+                SingleResponse<CollectionVO> response = collectionReadFacadeService.queryById(Long.valueOf(goodsId));
+                if (response.getSuccess()) {
+                    yield response.getData();
+                }
+                yield null;
+            }
+
+            case BLIND_BOX -> {
+                SingleResponse<BlindBoxVO> response = blindBoxReadFacadeService.queryById(Long.valueOf(goodsId));
+                if (response.getSuccess()) {
+                    yield response.getData();
+                }
+                yield null;
+            }
+            default -> throw new UnsupportedOperationException(ERROR_CODE_UNSUPPORTED_GOODS_TYPE);
+        };
+    }
+```
+
+1. 藏品流程
+
+传入商品ID(goodsId)，先去查询商品信息，查询商品信息的时候需要注意是三级缓存，本地JetCache缓存过期时间10min，Redis缓存60min，如果都没有的话去数据库查询。
+
+之后查询库存（很重要），主要就是去Redis中查询库存信息，如果查不到的话就去数据库中查询库存做兜底策略，之后返回
+
+2. 盲盒流程
+
+跟藏品流程几乎一样，拿着商品id（goodsId），查询盲盒信息，查询盲盒信息的时候依旧是缓存，兜底是数据库。之后是库存的查询操作。
+
+之后的操作：判断是否是正在售卖的状态同时判断前端传递的金额和商品价格是否相等，如果不相等就快速失败，fail-fast，符合开发规范。
+
+##### GoodsBookValidator（替换掉StockValidator），商品预定校验
+
+获取商品信息，同上**getGoods**。
+
+判断这个商品是否可以预约，属性在:**canBook**。同时我们系统是支持预定的。
+
+```java
+public class GoodsBookValidator extends BaseOrderCreateValidator {
+
+    private GoodsFacadeService goodsFacadeService;
+
+    @Override
+    protected void doValidate(OrderCreateRequest request) throws OrderException {
+        BaseGoodsVO baseGoodsVO = goodsFacadeService.getGoods(request.getGoodsId(), request.getGoodsType());
+        if(baseGoodsVO.canBook()){
+            Boolean hasBooked = goodsFacadeService.isGoodsBooked(request.getGoodsId(), request.getGoodsType(), request.getBuyerId());
+
+            if (!hasBooked) {
+                throw new OrderException(GOODS_NOT_BOOKED);
+            }
+        }
+    }
+
+    public GoodsBookValidator(GoodsFacadeService goodsFacadeService) {
+        this.goodsFacadeService = goodsFacadeService;
+    }
+
+    public GoodsBookValidator() {
+    }
+}
+```
+
+我们的预定是通过bitMap数据结构进行存储的，获取是否已经预定可以通过Redis中的bitmap进行判断。核心代码如下：
+
+```java
+    public boolean isBooked(String goodsId, GoodsType goodsType, String buyerId) {
+        RBitSet bookedUsers = redissonClient.getBitSet(BOOK_KEY + goodsType + CacheConstant.CACHE_KEY_SEPARATOR + goodsId);
+        return bookedUsers.get(Integer.parseInt(buyerId));
+    }
+```
+
+
+
+#### 订单号生成
+
+要求：
+
+1. 不能重复
+2. 订单号不能被预测出来
+3. 如果是分库分表的话，需要友好。比如按照买家ID或者卖家ID进行分库分表，之后取模运算的话可以拿到对应的表，通过基因法的方式可以在订单号中找到对应的标识
+4. 如果有什么需要一些信息编码的话可以放到订单号中
+
+我们系统是按照三种方式进行编码的，一个是按照业务标识，比如交易订单、支付订单、退款单等（businessCode）、唯一序列号（Sequence）、表的下标（比如0001、0002、0003标识信息是存储在哪一张表中，table）。
+
+比如：`10   175982348234789237489279   0001`。
+
+回到代码中的方法：
+
+我们的分布式ID生成类是：`DistributeID`，必须的参数是：**系统标识码（businessCode）、表下表（table）、序列号（seq）**
+
+如果我们需要创建一个id，需要传入的参数有：buinessCode、externalId（用于表示卖家 买家id）、sequenceNumber（唯一id）。
+
+```java
+public enum BusinessCode {
+    /**
+     * 订单
+     */
+    TRADE_ORDER(10, 4),
+    /**
+     * 支付单
+     */
+    PAY_ORDER(11, 1),
+
+    /**
+     * 退款单
+     */
+    REFUND_ORDER(12, 1),
+
+    /**
+     * 持有藏品
+     */
+    HELD_COLLECTION(13, 1);
+    private static final int MAX_CODE = 99;
+    private static final int MIN_CODE = 10;
+    private int code;
+    private int tableCount;
+    BusinessCode(int code, int tableCount) {
+        if (code > MAX_CODE || code < MIN_CODE) {
+            throw new UnsupportedOperationException("unsupport code : " + code);
+        }
+        this.code = code;
+        this.tableCount = tableCount;
+    }
+    public int tableCount() {
+        return tableCount;
+    }
+    public int code() {
+        return code;
+    }
+    public String getCodeString() {
+        return String.valueOf(this.code);
+    }
+}
+```
+
+上述是BuinessCode枚举类，其中的第一位是标识码，第二位是表的数量。
+
+externalId是代表买家或者卖家id，作用是什么呢？就是获取对应表的下标，比如分了4个表，根据这个id对4取余获取的值就是存储的表位置。我们使用方法是通过这个id进行hashCode，之后拿到之后与表的数量取模运算之后强转成int。
+
+```java
+public class DefaultShardingTableStrategy implements ShardingTableStrategy {
+
+    public DefaultShardingTableStrategy() {
+    }
+
+    @Override
+    public int getTable(String externalId,int tableCount) {
+        int hashCode = externalId.hashCode();
+        return (int) Math.abs((long) hashCode) % tableCount;
+        //  为了性能更好，可以优化成：return (int) Math.abs((long) hashCode) & (tableCount - 1); 具体原理参考 hashmap 的 hash 方法
+    }
+}
+```
+
+拿到取模运算之后的值之后在前面拼接上0。
+
+如何拿到唯一的sequenceNumber呢？我们是直接通过雪花算法生成的，就算是有很多机器的话还是可以正常运行成功的。
+
+整体代码如下：
+
+```java
+    public static String generateWithSnowflake(BusinessCode businessCode, long workerId,
+                                               String externalId) {
+        long id = IdUtil.getSnowflake(workerId).nextId();
+        return generate(businessCode, externalId, id);
+    }
+
+    public static String generate(BusinessCode businessCode,
+                                  String externalId, Long sequenceNumber) {
+        DistributeID distributeId = create(businessCode, externalId, sequenceNumber);
+        return distributeId.businessCode + distributeId.seq + distributeId.table;
+    }
+
+    public static DistributeID create(BusinessCode businessCode,
+                                      String externalId, Long sequenceNumber) {
+
+        DistributeID distributeId = new DistributeID();
+        distributeId.businessCode = businessCode.getCodeString();
+        String table = String.valueOf(shardingTableStrategy.getTable(externalId, businessCode.tableCount()));
+        distributeId.table = StringUtils.leftPad(table, 4, "0");
+        distributeId.seq = String.valueOf(sequenceNumber);
+        return distributeId;
+    }
+```
+
+测试类：
+
+```java
+    @Test
+    public void generate() {
+        System.out.println(IdUtil.getSnowflake(BusinessCode.TRADE_ORDER.code()).nextId());
+        Assert.assertEquals(DistributeID.generate(BusinessCode.TRADE_ORDER, "6", 1769649671860822016L), "1017696496718608220160002");
+    }
+```
+
+> 回顾：我们整体的设计就是需要在订单号上加上我们业务逻辑需要的属性，比如：业务号、唯一号、对应表下标。
+
+#### 事件异步监听
+
+在订单创建之后异步执行确认，
+
+```java
+applicationContext.publishEvent(new OrderCreateEvent(tradeOrder))
+```
+
+创建OrderCreateEvent监听事件，需要继承自SpringEvent的ApplicationEvent
+
+```java
+public class OrderCreateEvent extends ApplicationEvent {
+
+    public OrderCreateEvent(TradeOrder tradeOrder) {
+        super(tradeOrder);
+    }
+}
+```
+
+![image-20260121002403916](images/NFTurbo/image-20260121002403916.png)
+
+调用super(tradeOrder)是将source设置成订单对象，重点是在接收方如何处理，处理的内容就是这个订单。
+
+之后就是监听器：
+
+```java
+@Component
+public class OrderEventListener {
+    @Autowired
+    private OrderFacadeService orderFacadeService;
+		// @Async("orderListenExecutor") 移除异步处理，本事件改为同步处理
+    // 因为在后面的压测中发现，异步处理会导致整体的订单CONFIRM延迟变长，影响用户体验，所以改为同步调用的方式，详见压测部分视频。
+    @TransactionalEventListener(value = OrderCreateEvent.class)
+    public void onApplicationEvent(OrderCreateEvent event) {
+
+        TradeOrder tradeOrder = (TradeOrder) event.getSource();
+        OrderConfirmRequest confirmRequest = new OrderConfirmRequest();
+        confirmRequest.setOperator(UserType.PLATFORM.name());
+        confirmRequest.setOperatorType(UserType.PLATFORM);
+        confirmRequest.setOrderId(tradeOrder.getOrderId());
+        confirmRequest.setIdentifier(tradeOrder.getIdentifier());
+        confirmRequest.setOperateTime(new Date());
+        confirmRequest.setBuyerId(tradeOrder.getBuyerId());
+        confirmRequest.setItemCount(tradeOrder.getItemCount());
+        confirmRequest.setGoodsType(tradeOrder.getGoodsType());
+        confirmRequest.setGoodsId(tradeOrder.getGoodsId());
+        orderFacadeService.confirm(confirmRequest);
+    }
+}
+```
+
+> 使用@TransactionalEventListener注解原因是需要等到主任务事务commit之后执行，在Return之后监听事件监听到事务正常成功才会执行。
+
+#### 分库分表
+
+**分表**：分表的数量一般是按照数据的存量、数据每天的增量、预计业务数据量持续时间来综合评估的，一般来说数据库在达到数据量2000万的时候会出现性能瓶颈，尽可能每一个表的数据量维持在2000万以下。
+
+有一个计算公式：`分表数量 = (存量的数据量 + 每年新增数据量 * 预期保存的年数) / 2000万 ，之后向上取2的幂所在数`，比如存量数据2000万，每年增量1000万，保存20年。即为`(2000 + 1000 * 2) / 2000 = 11 ====>16`，最后分表就是16。
+
+分表字段的选择一般是根据买家id或者卖家id，由于我们的ID也是经过设计的，参考上面的订单号生成，可以根据订单号快速的获取到对应素具所在表。
+
+分表的算法采用的是hash 之后取模的算法，针对买家id进行取模运算，之后对总分表数取模。如果想要更好的性能以及扩展，可以考虑在hashcode计算之后的获取的时候将取模运算换成按位与运算。这也是为什么采用2的幂来计算表数量的原因。
+
+```java
+public class DefaultShardingTableStrategy implements ShardingTableStrategy {
+  public DefaultShardingTableStrategy(){
+  }
+  
+  @Overide
+  public int getTable(String externalId, int tableCount) {
+    int hashCode = externalId.hashCode();
+    return (int)(Math.abs((long) hashCode) % tableCount);
+    // return (int)(Math.abs((long) hashCode) & (tableCount - 1));
+  }
+}
+```
+
+**分库分表框架**：ShardingJDBC
+
+##### 分库分表配置
+
+```yaml
+spring:
+	shardingsphere:
+		rules:
+			sharding:
+				tables:
+          trade_order:
+            actual-data-nodes: ds.trade_order_000${0..3}
+            keyGenerateStrategy:
+              column: id
+              keyGeneratorName: snowflake
+            table-strategy:
+              complex:
+                shardingColumns: buyer_id,order_id
+                shardingAlgorithmName: trade-order-sharding
+          trade_order_stream:
+            actual-data-nodes: ds.trade_order_stream_000${0..3}
+            keyGenerateStrategy:
+              column: id
+              keyGeneratorName: snowflake
+            table-strategy:
+              complex:
+                shardingColumns: buyer_id,order_id
+                shardingAlgorithmName: trade-order-sharding
+        shardingAlgorithms:
+#          t-order-inline:
+#            type: INLINE
+#            props:
+#              algorithm-expression: trade_order_0${Math.abs(buyer_id.hashCode()) % 4}
+          trade-order-sharding:
+            type: CLASS_BASED
+            props:
+              algorithmClassName: cn.hollis.nft.turbo.order.infrastructure.sharding.algorithm.TurboKeyShardingAlgorithm
+              strategy: complex
+              tableCount: 4
+              mainColum: buyer_id
+        keyGenerators:
+          snowflake:
+            type: SNOWFLAKE
+        auditors:
+          sharding_key_required_auditor:
+            type: DML_SHARDING_CONDITIONS
+
+```
+
+可以看到在`tables`属性中存在`trade_order`订单表和`trade_order_stream`订单流水表。
+
+- `actual-data-nodes`:实际的物理节点，`ds.trade_order_000${0...3}`指的是存在4个分片，从0000 到 00003。
+- `keyGenerateStrategy`：主键生成策略。
+- `table-strategy`：分表策略。这里我们使用的是自定义的分表策略。
+
+**分片算法**
+
+使用的type是：`CLASS_BASED`表示使用class类。具体的实现类是`TurboKeyShardingAlgorithm`。分片策略（strategy）是`complex`。`tableCount`是4，这个是我们自定义的，用于算法的实现。`mainColumn`分片列，这个是我们自己定义的。
+
+接下来看看最主要的这个算法类的实现方式。
+
+实现实现ComplexKeysShardingAlgorithm和HintShardingAlgorithm，一个是用来处理复杂的SQL中的三种不同情况的（1. 只有buyer_id、order_id、两者兼备），另一个是用来处理用到了Hint的话可以忽略SQL内容。
+
+核心方法：`doSharding`
+
+```java
+@Override
+    public Collection<String> doSharding(Collection<String> availableTargetNames, ComplexKeysShardingValue<String> complexKeysShardingValue) {
+        Collection<String> result = new HashSet<>();
+
+        // 获取主要列，就是buyer_id
+        String mainColum = props.getProperty(PROP_MAIN_COLUM);
+        // 获取分片键的值
+        Collection<String> mainColums = complexKeysShardingValue.getColumnNameAndShardingValuesMap().get(mainColum);
+
+        if (CollectionUtils.isNotEmpty(mainColums)) {
+            // 如果存在主要列的话也就是buyer_id，会按照这个buyer_id进行分片，走的就是之前在 DistributeID 类中的使用基因法生成的表索引
+            for (String colum : mainColums) {
+                String shardingTarget = calculateShardingTarget(colum);
+                result.add(shardingTarget);
+            }
+            return getMatchedTables(result, availableTargetNames);
+        }
+
+        complexKeysShardingValue.getColumnNameAndShardingValuesMap().remove(mainColum);
+        Collection<String> otherColums = complexKeysShardingValue.getColumnNameAndShardingValuesMap().keySet();
+        // 如果没有buyer_id，也就是只有orderId，会按照orderId进行分片，由于我们的orderId生成的时候已经按照逻辑进行了单独的设计（业务号 + 雪花算法生成的ID + 表索引）
+        if (CollectionUtils.isNotEmpty(otherColums)) {
+            for (String colum : otherColums) {
+                Collection<String> otherColumValues = complexKeysShardingValue.getColumnNameAndShardingValuesMap().get(colum);
+                for (String value : otherColumValues) {
+                    String shardingTarget = extractShardingTarget(value);
+                    result.add(shardingTarget);
+                }
+            }
+            return getMatchedTables(result, availableTargetNames);
+        }
+
+        return null;
+    }
+```
+
+拿到对应表的名称之后 shardingsphere 会自动将原本的表结构进行拼接成对应的表名。
+
+> 其中使用buyer_id的时候进行的分片处理核心逻辑还是：
+>
+> ```java
+> @Override
+>     public int getTable(String externalId,int tableCount) {
+>         int hashCode = externalId.hashCode();
+>         return (int) Math.abs((long) hashCode) % tableCount;
+>         //  为了性能更好，可以优化成：return (int) Math.abs((long) hashCode) & (tableCount - 1); 具体原理参考 hashmap 的 hash 方法
+>     }
+> ```
+>
+> 获取到区域获取到的下标，之后在前边拼接000。结果是0001，之后就可以进行返回了。
+>
+> 如果是order_id的话，拿到整个order_id进行拆分，前两位 + 除了后四位中间的 + 后四位。
+>
+> ```java
+> public static DistributeID valueOf(String id) {
+>         DistributeID distributeId = new DistributeID();
+>         distributeId.businessCode = id.substring(0, 2);
+>         distributeId.seq = id.substring(2, id.length() - 4);
+>         distributeId.table = id.substring(id.length() - 4, id.length());
+>         return distributeId;
+>     }
+> ```
+>
+> 之后从`DistributeID`取出table属性即可。
+>
+> 之后将拿到的0001与可获取的表的后缀相同的名称返回。
+>
+> ```java
+> private Collection<String> getMatchedTables(Collection<String> results, Collection<String> availableTargetNames) {
+>         Collection<String> matchedTables = new HashSet<>();
+>         for (String result : results) {
+>             matchedTables.addAll(availableTargetNames.parallelStream().filter(each -> each.endsWith(result)).collect(Collectors.toSet()));
+>         }
+>         return matchedTables;
+>     }
+> ```
+
 
 
 ### 藏品管理功能设计

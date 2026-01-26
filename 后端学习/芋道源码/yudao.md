@@ -671,19 +671,762 @@ return choose(lbRequest, serviceId, supportedLifecycleProcessors).doOnNext(respo
 
 
 
+## SaaS多租户
+
+### 技术组件
+
+#### 如何实现多租户的DB封装？
+
+实现方案：
+
+|           | 方案一：独立数据库（分库） | 方案二：共享数据库，独立的Schema（分表） | 方案三：共享数据库，共享Schema，共享数据表 |
+| --------- | -------------------------- | ---------------------------------------- | ------------------------------------------ |
+| 维护成本  | 高                         | 中                                       | 低                                         |
+| 隔离性    | 高                         | 高                                       | 低                                         |
+| 性能      | 强                         | 中                                       | 低                                         |
+| 硬件成本  | 高                         | 中                                       | 低                                         |
+| 备份/还原 | 简单                       | 中                                       | 困难                                       |
+
+项目选择：为了维护成本低同时兼容性能足够满足机器，我们选择的方案三，基于MyBatis-Plus的**tenant_id**字段，自动进行过滤 **WHERE tenant_id = ?**。
+
+未来扩展：如果是小租户，业务量比较大了之后可以采用Sharding-Sphere分库分表；大租户的话，独立的数据库，甚至是一个大租户多个库 + 数据表（也可以采取分库分表）。
+
+整体实现多租户功能是基于Mybatis-Plus的多租户插件实现的，[Mybatis-plus插件](https://baomidou.com/plugins/tenant/)。
+
+##### 代码实现
+
+首先我们需要用到的是租户ID，在数据库表中需要加上对应的tenant_id，比如member_user表：
+
+![image-20260114001429617](images/yudao/image-20260114001429617.png)
+
+由于mybatis-Plus默认使用的字段名就是这个。所以定义的时候最好一致。下面是拓展多租户的实体类：**TenantBaseDO**
+
+```java
+@Data
+@EqualsAndHashCode(callSuper = true)
+public abstract class TenantBaseDO extends BaseDO {
+    /**
+     * 多租户编号
+     */
+    private Long tenantId;
+}
+```
+
+可以先根据MyBatis-Plus看一下如果是一个租户系统的话需要实现哪一个接口，其中有哪一些方法操作。
+
+打开链接，`tenantLineHandler`是核心的接口，用于处理租户逻辑相关的内容。接口中存在如下方法：
+
+1. getTenantId（获取租户ID值的表达式）
+2. getTenantIdColumn（获取租户的字段名，默认是：tenant_id）
+3. ignoreTable（根据表名判断是否需要忽略拼接多租户条件）
+4. ignoreInsert（忽略插入租户字段逻辑）
+
+大概就是两种，一种是关于租户ID值的表达式，另一种是是否忽略掉一些表结构。
+
+我们在**project-server**中加上租户对应的配置：
+
+```yaml
+  tenant: # 多租户相关配置项
+    enable: true
+    ignore-urls:
+      - /jmreport/* # 积木报表，无法携带租户编号
+    ignore-visit-urls:
+      - /admin-api/system/user/profile/**
+      - /admin-api/system/auth/**
+    ignore-tables:
+    ignore-caches:
+      - user_role_ids
+      - permission_menu_ids
+      - oauth_client
+      - notify_template
+      - mail_account
+      - mail_template
+      - sms_template
+      - iot:device
+      - iot:thing_model_list
+```
+
+之后创建实体类映射到这个yaml配置中。
+
+```java
+@ConfigurationProperties(prefix = "yudao.tenant")
+@Data
+public class TenantProperties {
+
+    /**
+     * 租户是否开启
+     */
+    private static final Boolean ENABLE_DEFAULT = true;
+
+    /**
+     * 是否开启
+     */
+    private Boolean enable = ENABLE_DEFAULT;
+
+    /**
+     * 需要忽略多租户的请求
+     *
+     * 默认情况下，每个请求需要带上 tenant-id 的请求头。但是，部分请求是无需带上的，例如说短信回调、支付回调等 Open API！
+     */
+    private Set<String> ignoreUrls = new HashSet<>();
+
+    /**
+     * 需要忽略跨（切换）租户访问的请求
+     *
+     * 原因是：某些接口，访问的是个人信息，在跨租户是获取不到的！
+     */
+    private Set<String> ignoreVisitUrls = Collections.emptySet();
+
+    /**
+     * 需要忽略多租户的表
+     *
+     * 即默认所有表都开启多租户的功能，所以记得添加对应的 tenant_id 字段哟
+     */
+    private Set<String> ignoreTables = Collections.emptySet();
+
+    /**
+     * 需要忽略多租户的 Spring Cache 缓存
+     *
+     * 即默认所有缓存都开启多租户的功能，所以记得添加对应的 tenant_id 字段哟
+     */
+    private Set<String> ignoreCaches = Collections.emptySet();
+
+}
+```
+
+自动配置类是：**YudaoTenantAutoConfiguration**
+
+```java
+@AutoConfiguration
+@ConditionalOnProperty(prefix = "yudao.tenant", value = "enable", matchIfMissing = true) // 允许使用 yudao.tenant.enable=false 禁用多租户
+@EnableConfigurationProperties(TenantProperties.class)
+public class YudaoTenantAutoConfiguration {
+}
+```
+
+对应路径：**META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports**中加入对应配置类信息：
+
+```shell
+cn.iocoder.yudao.framework.tenant.config.YudaoTenantRpcAutoConfiguration
+cn.iocoder.yudao.framework.tenant.config.YudaoTenantAutoConfiguration
+```
+
+在自动配置类中最主要的是将我们自定义的拦截器添加到MyBatis-Plus的拦截器中。
+
+```java
+    @Bean
+    public TenantLineInnerInterceptor tenantLineInnerInterceptor(TenantProperties properties,
+                                                                 MybatisPlusInterceptor interceptor) {
+        TenantLineInnerInterceptor inner = new TenantLineInnerInterceptor(new TenantDatabaseInterceptor(properties));
+        // 添加到 interceptor 中
+        // 需要加在首个，主要是为了在分页插件前面。这个是 MyBatis Plus 的规定
+        MyBatisUtils.addInterceptor(interceptor, inner, 0);
+        return inner;
+    }
+```
+
+接下来是**TenantDatabaseInterceptor**类代码：
+
+```java
+public class TenantDatabaseInterceptor implements TenantLineHandler {
+
+    /**
+     * 忽略的表
+     *
+     * KEY：表名
+     * VALUE：是否忽略
+     */
+    private final Map<String, Boolean> ignoreTables = new HashMap<>();
+
+    public TenantDatabaseInterceptor(TenantProperties properties) {
+        // 不同 DB 下，大小写的习惯不同，所以需要都添加进去
+        properties.getIgnoreTables().forEach(table -> {
+            addIgnoreTable(table, true);
+        });
+        // 在 OracleKeyGenerator 中，生成主键时，会查询这个表，查询这个表后，会自动拼接 TENANT_ID 导致报错
+        addIgnoreTable("DUAL", true);
+    }
+
+    @Override
+    public Expression getTenantId() {
+        return new LongValue(TenantContextHolder.getRequiredTenantId());
+    }
+
+    @Override
+    public boolean ignoreTable(String tableName) {
+        // 情况一，全局忽略多租户
+        if (TenantContextHolder.isIgnore()) {
+            return true;
+        }
+        // 情况二，忽略多租户的表
+        tableName = SqlParserUtils.removeWrapperSymbol(tableName);
+        Boolean ignore = ignoreTables.get(tableName.toLowerCase());
+        if (ignore == null) {
+            ignore = computeIgnoreTable(tableName);
+            synchronized (ignoreTables) {
+                addIgnoreTable(tableName, ignore);
+            }
+        }
+        return ignore;
+    }
+
+    private void addIgnoreTable(String tableName, boolean ignore) {
+        ignoreTables.put(tableName.toLowerCase(), ignore);
+        ignoreTables.put(tableName.toUpperCase(), ignore);
+    }
+
+    private boolean computeIgnoreTable(String tableName) {
+        // 找不到的表，说明不是 yudao 项目里的，不进行拦截（忽略租户）
+        TableInfo tableInfo = TableInfoHelper.getTableInfo(tableName);
+        if (tableInfo == null) {
+            return true;
+        }
+        // 如果继承了 TenantBaseDO 基类，显然不忽略租户
+        if (TenantBaseDO.class.isAssignableFrom(tableInfo.getEntityType())) {
+            return false;
+        }
+        // 如果添加了 @TenantIgnore 注解，则忽略租户
+        TenantIgnore tenantIgnore = tableInfo.getEntityType().getAnnotation(TenantIgnore.class);
+        return tenantIgnore != null;
+    }
+
+}
+```
+
+通过实现**TenantLineHandler**类重写方法分别获取到租户ID和忽略对应表结构。
+
+这个租户ID是通过ThreadLocal进行存储的，`private static final ThreadLocal<Long> TENANT_ID = new TransmittableThreadLocal<>();`那么这个租户id是在什么时候设置的呢？有拦截器难道没有过滤器？是的，我们是存在这个过滤器的：**TenantContextWebFilter**。代码如下：
+
+```java
+public class    TenantContextWebFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        // 设置
+        Long tenantId = WebFrameworkUtils.getTenantId(request);
+        if (tenantId != null) {
+            TenantContextHolder.setTenantId(tenantId);
+        }
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            // 清理
+            TenantContextHolder.clear();
+        }
+    }
+
+}
+```
+
+我们的租户ID是放在Header头中的，由于其他位置也会使用到这个租户ID，所以提供了一个统一的获取方法：`WebFrameworkUtils.getTenantId(request)`，之后设置租户ID，finally中clear清楚threadLocal中的数据。防止**线程污染**和**内存泄露**。
+
+在设置表实体类的时候，我们一般需要标识这个类是否需要忽略，怎么做好呢？难道是在yaml文件中加上忽略配置，之后在代码中进行统一判断实体类对应是否是需要忽略的表吗？很明显比较难搞。我们可以通过AOP的形式使用注解在类上标识这个实体类是否需要被忽略。
+
+```java
+@Target({ElementType.METHOD, ElementType.TYPE})
+@Retention(RetentionPolicy.RUNTIME)
+@Inherited
+public @interface TenantIgnore {
+
+    /**
+     * 是否开启忽略租户，默认为 true 开启
+     *
+     * 支持 Spring EL 表达式，如果返回 true 则满足条件，进行租户的忽略
+     */
+    String enable() default "true";
+}
+```
+
+切面：**TenantIgnoreAspect**
+
+```java
+@Aspect
+@Slf4j
+public class TenantIgnoreAspect {
+    @Around("@annotation(tenantIgnore)")
+    public Object around(ProceedingJoinPoint joinPoint, TenantIgnore tenantIgnore) throws Throwable {
+        Boolean oldIgnore = TenantContextHolder.isIgnore();
+        try {
+            // 计算条件，满足的情况下，才进行忽略
+            Object enable = SpringExpressionUtils.parseExpression(tenantIgnore.enable());
+            if (Boolean.TRUE.equals(enable)) {
+                TenantContextHolder.setIgnore(true);
+            }
+            // 执行逻辑
+            return joinPoint.proceed();
+        } finally {
+            TenantContextHolder.setIgnore(oldIgnore);
+        }
+    }
+}
+```
+
+```java
+    public static Object parseExpression(String expressionString) {
+        return parseExpression(expressionString, null);
+    }    
+
+		public static Object parseExpression(String expressionString, Map<String, Object> variables) {
+        if (StrUtil.isBlank(expressionString)) {
+            return null;
+        }
+        Expression expression = EXPRESSION_PARSER.parseExpression(expressionString);
+        StandardEvaluationContext context = new StandardEvaluationContext(); // 创建上下文环境
+        context.setBeanResolver(new BeanFactoryResolver(SpringUtil.getApplicationContext())); // 将IOC中的Bean都放入到上下文中
+        if (MapUtil.isNotEmpty(variables)) {
+            context.setVariables(variables);
+        }
+        return expression.getValue(context); // 获取到的是Boolean.TRUE，如果是其他类型的话获取到的可能是string类型的字符串
+    }
+```
+
+在**TenantDatabaseInterceptor**拦截器中的**computeIgnoreTable**方法中，是通过是否添加**@TenantIgnore**注解来判断需要过滤掉的表结构的。
+
+#### 如何实现缓存租户id
+
+先谈论如果要实现缓存租户ID，方案和DB的类似。
+
+- 方案一：独立数据库（分库），每一个租户对应一个Redis。
+- **×**方案二：共享数据库，独立的Schema（数据表）(很明显这个不合适，redis中压根没有表的概念)
+- 方案三：通过Redis Key做手段。原本Redis Key + ":" + tenantid（**user:1024**），现在的Key变成（**user:1:1024**，表示name + tenantid + id）
+
+使用方式：Spring Cache + Redis。
+
+##### 代码实现
+
+设置**tenantRedisCacheManager**为主要Bean，
+
+```java
+    @Bean
+    @Primary // 引入租户时，tenantRedisCacheManager 为主 Bean
+    public RedisCacheManager tenantRedisCacheManager(RedisTemplate<String, Object> redisTemplate,
+                                                     RedisCacheConfiguration redisCacheConfiguration,
+                                                     YudaoCacheProperties yudaoCacheProperties,
+                                                     TenantProperties tenantProperties) {
+        // 创建 RedisCacheWriter 对象
+        RedisConnectionFactory connectionFactory = Objects.requireNonNull(redisTemplate.getConnectionFactory());
+        RedisCacheWriter cacheWriter = RedisCacheWriter.nonLockingRedisCacheWriter(connectionFactory,
+                BatchStrategies.scan(yudaoCacheProperties.getRedisScanBatchSize()));
+        // 创建 TenantRedisCacheManager 对象
+        return new TenantRedisCacheManager(cacheWriter, redisCacheConfiguration, tenantProperties.getIgnoreCaches());
+    }
+```
+
+> RedisCacheWriter是缓存写入的组件，设置无锁Redis
+
+**TenantRedisCacheManager**类：
+
+```java
+@Slf4j
+public class TenantRedisCacheManager extends TimeoutRedisCacheManager {
+    private static final String SPLIT = "#";
+    private final Set<String> ignoreCaches;
+    public TenantRedisCacheManager(RedisCacheWriter cacheWriter,
+                                   RedisCacheConfiguration defaultCacheConfiguration,
+                                   Set<String> ignoreCaches) {
+        super(cacheWriter, defaultCacheConfiguration);
+        this.ignoreCaches = ignoreCaches;
+    }
+
+    @Override
+    public Cache getCache(String name) {
+        String[] names = StrUtil.splitToArray(name, SPLIT);
+        // 如果开启多租户，则 name 拼接租户后缀
+        if (!TenantContextHolder.isIgnore()
+                && TenantContextHolder.getTenantId() != null
+                && !CollUtil.contains(ignoreCaches, names[0])) {
+            name = name + ":" + TenantContextHolder.getTenantId();
+        }
+        // 继续基于父方法
+        return super.getCache(name);
+    }
+}
+```
+
+重写了**getCache**的逻辑，在@Cacheable(cacheNames = "name#过期时间", key = "#id")注解中拿到**name**，之后拼接：**:tenantid**，之后再设置key值即可。
+
+> 使用redis desktop manager的时候，如果使用默认生成的Key策略是两个:，即::，在软件中会存在一个空键，可能是软件问题，但是为了避免掉的话还是在设置Key的时候将::改成:。
+>
+> ```java
+> config = config.computePrefixWith(cacheName -> {
+>             String keyPrefix = cacheProperties.getRedis().getKeyPrefix();
+>             if (StringUtils.hasText(keyPrefix)) {
+>                 keyPrefix = keyPrefix.lastIndexOf(StrUtil.COLON) == -1 ? keyPrefix + StrUtil.COLON : keyPrefix;
+>                 return keyPrefix + cacheName + StrUtil.COLON;
+>             }
+>             return cacheName + StrUtil.COLON ;
+>         });
+> ```
+>
+> 重新定义JSON序列化的方式，使用Jackson。
+>
+> 设置过期时间。
+>
+> 是否缓存null值。
+
+```java
+@AutoConfiguration
+@EnableConfigurationProperties({CacheProperties.class, YudaoCacheProperties.class})
+@EnableCaching
+public class YudaoCacheAutoConfiguration {
+
+    /**
+     * RedisCacheConfiguration Bean
+     * <p>
+     * 参考 org.springframework.boot.autoconfigure.cache.RedisCacheConfiguration 的 createConfiguration 方法
+     */
+    @Bean
+    @Primary
+    public RedisCacheConfiguration redisCacheConfiguration(CacheProperties cacheProperties) {
+        RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig();
+        // 1. 重定义key的前置策略。
+        // 设置使用 : 单冒号，而不是双 :: 冒号，避免 Redis Desktop Manager 多余空格
+        // 详细可见 https://blog.csdn.net/chuixue24/article/details/103928965 博客
+        // 再次修复单冒号，而不是双 :: 冒号问题，Issues 详情：https://gitee.com/zhijiantianya/yudao-cloud/issues/I86VY2
+        config = config.computePrefixWith(cacheName -> {
+            String keyPrefix = cacheProperties.getRedis().getKeyPrefix();
+            if (StringUtils.hasText(keyPrefix)) {
+                keyPrefix = keyPrefix.lastIndexOf(StrUtil.COLON) == -1 ? keyPrefix + StrUtil.COLON : keyPrefix;
+                return keyPrefix + cacheName + StrUtil.COLON;
+            }
+            return cacheName + StrUtil.COLON ;
+        });
+
+        // 2. 重定义value的序列化方式。
+
+        // 设置使用 JSON 序列化方式
+        config = config.serializeValuesWith(
+                RedisSerializationContext.SerializationPair.fromSerializer(buildRedisSerializer()));
+        // 设置 CacheProperties.Redis 的属性
+        // 3. 重定义全局过期时间
+        CacheProperties.Redis redisProperties = cacheProperties.getRedis();
+        if (redisProperties.getTimeToLive() != null) {
+            config = config.entryTtl(redisProperties.getTimeToLive());
+        }
+
+        // 4. 重定义是否缓存 null 值
+        if (!redisProperties.isCacheNullValues()) {
+            config = config.disableCachingNullValues();
+        }
+        if (!redisProperties.isUseKeyPrefix()) {
+            config = config.disableKeyPrefix();
+        }
+        return config;
+    }
+
+    @Bean
+    public RedisCacheManager redisCacheManager(RedisTemplate<String, Object> redisTemplate,
+                                               RedisCacheConfiguration redisCacheConfiguration,
+                                               YudaoCacheProperties yudaoCacheProperties) {
+        // 创建 RedisCacheWriter 对象
+        RedisConnectionFactory connectionFactory = Objects.requireNonNull(redisTemplate.getConnectionFactory());
+        RedisCacheWriter cacheWriter = RedisCacheWriter.nonLockingRedisCacheWriter(connectionFactory,
+                BatchStrategies.scan(yudaoCacheProperties.getRedisScanBatchSize()));
+        // 创建 TenantRedisCacheManager 对象
+        return new TimeoutRedisCacheManager(cacheWriter, redisCacheConfiguration);
+    }
+}
+```
+
+在设置过期时间的时候，在注解中使用方法是：@Cacheable(cacheNames = "name#**过期时间**", key = "key")。具体的处理方式就是在按照 # 符号分割，按照：**d h m s **来区分**天、小时、分钟、秒**时间单位。
+
+```java
+public class TimeoutRedisCacheManager extends RedisCacheManager {
+    private static final String SPLIT = "#";
+    public TimeoutRedisCacheManager(RedisCacheWriter cacheWriter, RedisCacheConfiguration defaultCacheConfiguration) {
+        super(cacheWriter, defaultCacheConfiguration);
+    }
+
+    @Override
+    protected RedisCache createRedisCache(String name, RedisCacheConfiguration cacheConfig) {
+        if (StrUtil.isEmpty(name)) {
+            return super.createRedisCache(name, cacheConfig);
+        }
+        // 如果使用 # 分隔，大小不为 2，则说明不使用自定义过期时间
+        String[] names = StrUtil.splitToArray(name, SPLIT);
+        if (names.length != 2) {
+            return super.createRedisCache(name, cacheConfig);
+        }
+        // 核心：通过修改 cacheConfig 的过期时间，实现自定义过期时间
+        if (cacheConfig != null) {
+            // 移除 # 后面的 : 以及后面的内容，避免影响解析
+            String ttlStr = StrUtil.subBefore(names[1], StrUtil.COLON, false); // 获得 ttlStr 时间部分
+            names[1] = StrUtil.subAfter(names[1], ttlStr, false); // 移除掉 ttlStr 时间部分
+            // 解析时间
+            Duration duration = parseDuration(ttlStr);
+            cacheConfig = cacheConfig.entryTtl(duration);
+        }
+        // 创建 RedisCache 对象，需要忽略掉 ttlStr
+        return super.createRedisCache(names[0] + names[1], cacheConfig);
+    }
+
+    /**
+     * 解析过期时间 Duration
+     *
+     * @param ttlStr 过期时间字符串
+     * @return 过期时间 Duration
+     */
+    private Duration parseDuration(String ttlStr) {
+        String timeUnit = StrUtil.subSuf(ttlStr, -1);
+        switch (timeUnit) {
+            case "d":
+                return Duration.ofDays(removeDurationSuffix(ttlStr));
+            case "h":
+                return Duration.ofHours(removeDurationSuffix(ttlStr));
+            case "m":
+                return Duration.ofMinutes(removeDurationSuffix(ttlStr));
+            case "s":
+                return Duration.ofSeconds(removeDurationSuffix(ttlStr));
+            default:
+                return Duration.ofSeconds(Long.parseLong(ttlStr));
+        }
+    }
+
+    /**
+     * 移除多余的后缀，返回具体的时间
+     *
+     * @param ttlStr 过期时间字符串
+     * @return 时间
+     */
+    private Long removeDurationSuffix(String ttlStr) {
+        return NumberUtil.parseLong(StrUtil.sub(ttlStr, 0, ttlStr.length() - 1));
+    }
+}
+```
+
+#### 如何实现租户通用功能的处理
+
+比如如果我们需要记录每一个租户的日志操作，或者是交易订单的自动过期。这种通用操作可以一个租户调用，所有租户都执行一次。因为是通用组件。
+
+我们还是使用AOP，戒奢从简，定义一个注解：**@TenantJob**。
+
+在**YudaoTenantAutoConfiguration**类中，按需导入这个注解的切面类：
+
+```java
+    @Bean
+    @ConditionalOnClass(name = "com.xxl.job.core.handler.annotation.XxlJob")
+    public TenantJobAspect tenantJobAspect(TenantFrameworkService tenantFrameworkService) {
+        return new TenantJobAspect(tenantFrameworkService);
+    }
+```
+
+接下来是切面类：
+
+```java
+@Aspect
+@RequiredArgsConstructor
+@Slf4j
+public class TenantJobAspect {
+    private final TenantFrameworkService tenantFrameworkService;
+    @Around("@annotation(tenantJob)")
+    public void around(ProceedingJoinPoint joinPoint, TenantJob tenantJob) {
+        // 获得租户列表
+        List<Long> tenantIds = tenantFrameworkService.getTenantIds();
+        if (CollUtil.isEmpty(tenantIds)) {
+            return;
+        }
+        // 逐个租户，执行 Job
+        Map<Long, String> results = new ConcurrentHashMap<>();
+        AtomicBoolean success = new AtomicBoolean(true); // 标记，是否存在失败的情况
+        XxlJobContext xxlJobContext = XxlJobContext.getXxlJobContext(); // XXL-Job 上下文
+        tenantIds.parallelStream().forEach(tenantId -> {
+            // TODO 芋艿：先通过 parallel 实现并行；1）多个租户，是一条执行日志；2）异常的情况
+            TenantUtils.execute(tenantId, () -> {
+                try {
+                    // 将父线程的 Context 塞到子线程
+                    XxlJobContext.setXxlJobContext(xxlJobContext);
+                    // 执行 Job
+                    Object result = joinPoint.proceed();
+                    results.put(tenantId, StrUtil.toStringOrEmpty(result));
+                } catch (Throwable e) {
+                    results.put(tenantId, ExceptionUtil.getRootCauseMessage(e));
+                    success.set(false);
+                    // 打印异常
+                    XxlJobHelper.log(StrUtil.format("[多租户({}) 执行任务({})，发生异常：{}]",
+                            tenantId, joinPoint.getSignature(), ExceptionUtils.getStackTrace(e)));
+                }
+            });
+        });
+        // 记录执行结果
+        if (success.get()) {
+            XxlJobHelper.handleSuccess(JsonUtils.toJsonString(results));
+        } else {
+            XxlJobHelper.handleFail(JsonUtils.toJsonString(results));
+        }
+    }
+}
+```
+
+> 解释一下这个切面类在做什么？首先其中一个租户执行了一个定时任务，
+>
+> `List<Long> tenantIds = tenantFrameworkService.getTenantIds();`获取到租户列表，如果没有租户，直接快速返回。
+>
+> 拿到每一个租户ID之后，使用`parallelStream`来并行执行任务，在这个并行处理的任务中，`TenantUtils.execute`可以将租户id设置到ThreadLocal中，`XxlJobContext.setXxlJobContext(xxlJobContext);`的作用是什么呢？**拿到主线程设置的xxl-job的上下文之后使用XxlJobHelper.log不会报错**。之后执行定时任务的方法，返回结果。如果其中有任何一个租户操作出现问题，我们会记录这个错误，并将这个success属性设置成false。用原子类的原因就是因为不要因为多线程引发错误。
+
+顺便看看**TenantUtils**工具类的`execute`方法:
+
+```java
+    public static void execute(Long tenantId, Runnable runnable) {
+        Long oldTenantId = TenantContextHolder.getTenantId();
+        Boolean oldIgnore = TenantContextHolder.isIgnore();
+        try {
+            TenantContextHolder.setTenantId(tenantId);
+            TenantContextHolder.setIgnore(false);
+            // 执行逻辑
+            runnable.run();
+        } finally {
+            TenantContextHolder.setTenantId(oldTenantId);
+            TenantContextHolder.setIgnore(oldIgnore);
+        }
+    }
+```
+
+> 扩展：XxlJobContext类
+>
+> 这个类最主要的就是一个`InheritableThreadLocal`类。![image-20260115004007568](images/yudao/image-20260115004007568.png)
+>
+> `InheritableThreadLocal`类主要就是处理ThreadLocal中父子线程不能共享数据的问题的。
+>
+> 这个类主要就是通过一个变量`inheritableThreadLocals`之后将这个变量映射到子线程的inheritableThreadLocals中。
 
 
 
+## MyBatis-Plus扩展
 
+我们在整个项目设置是时候设置了多个数据源，需要支持MySQL、Oracle、postgresql、SQLServer等数据库。同时我们项目引入了MyBatis-Plus，但是对于不同的数据源配置项略有不同。
 
+在server配置中我们设置了id-type = NONE，意味着我们需要动态设置对应的数据源类型主键。
 
+我们在配置文件中已经设置了
 
+```yaml
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true # 虽然默认为 true ，但是还是显示去指定下。
+  global-config:
+    db-config:
+      id-type: NONE # “智能”模式，基于 IdTypeEnvironmentPostProcessor + 数据源的类型，自动适配成 AUTO、INPUT 模式。
+      #      id-type: AUTO # 自增 ID，适合 MySQL 等直接自增的数据库
+      #      id-type: INPUT # 用户输入 ID，适合 Oracle、PostgreSQL、Kingbase、DB2、H2 数据库
+      #      id-type: ASSIGN_ID # 分配 ID，默认使用雪花算法。注意，Oracle、PostgreSQL、Kingbase、DB2、H2 数据库时，需要去除实体类上的 @KeySequence 注解
+      logic-delete-value: 1 # 逻辑已删除值(默认为 1)
+      logic-not-delete-value: 0 # 逻辑未删除值(默认为 0)
+    banner: false # 关闭控制台的 Banner 打印
+  type-aliases-package: ${yudao.info.base-package}.dal.dataobject
+  encryptor:
+    password: XDV71a+xqStEA3WH # 加解密的秘钥，可使用 https://www.imaegoo.com/2020/aes-key-generator/ 网站生成
+```
 
+设置的NONE。如果是MySQL的话我们需要设置的是自增主键：**id-type: AUTO**。如果是其他数据库的话我们需要自己设置主键：**id-type: INPUT**。我们希望在项目启动的时候就设置上，还是借助于：**EnvironmentPostProcessor**接口。
 
+我们在配置文件中设置不同的数据源的方式大差不差：
 
+```yaml
+      datasource:
+        master:
+          url: jdbc:mysql://82.156.189.254:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          #url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
+          #url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
+          #url: jdbc:sqlserver://127.0.0.1:1433;DatabaseName=ruoyi-vue-pro;SelectMethod=cursor;encrypt=false;rewriteBatchedStatements=true;useUnicode=true;characterEncoding=utf-8 # SQLServer 连接的示例
+```
 
+可以通过mybatisplus获取到具体的连接的DBType。`**com.baomidou.mybatisplus.extension.toolkit.JdbcUtils.getDbType(url)**`。根据DBType设置不同的**id-type**属性。代码如下：
 
+```java
+public class IdTypeEnvironmentPostProcessor implements EnvironmentPostProcessor {
+    private static final String ID_TYPE_KEY = "mybatis-plus.global-config.db-config.id-type";
+    private static final String DATASOURCE_DYNAMIC_KEY = "spring.datasource.dynamic";
+    private static final String QUARTZ_JOB_STORE_DRIVER_KEY = "spring.quartz.properties.org.quartz.jobStore.driverDelegateClass";
+    private static final Set<DbType> INPUT_ID_TYPES = SetUtils.asSet(DbType.ORACLE, DbType.ORACLE_12C,
+            DbType.POSTGRE_SQL, DbType.KINGBASE_ES, DbType.DB2, DbType.H2);
 
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        // 如果获取不到 DbType，则不进行处理
+        DbType dbType = getDbType(environment);
+        if (dbType == null) {
+            return;
+        }
+        // 设置 Quartz JobStore 对应的 Driver
+        // TODO 芋艿：暂时没有找到特别合适的地方，先放在这里
+        setJobStoreDriverIfPresent(environment, dbType);
+
+        // 如果非 NONE，则不进行处理
+        IdType idType = getIdType(environment);
+        if (idType != IdType.NONE) {
+            return;
+        }
+        // 情况一，用户输入 ID，适合 Oracle、PostgreSQL、Kingbase、DB2、H2 数据库
+        if (INPUT_ID_TYPES.contains(dbType)) {
+            setIdType(environment, IdType.INPUT);
+            return;
+        }
+        // 情况二，自增 ID，适合 MySQL、DM 达梦等直接自增的数据库
+        setIdType(environment, IdType.AUTO);
+    }
+
+    public IdType getIdType(ConfigurableEnvironment environment) {
+        String value = environment.getProperty(ID_TYPE_KEY);
+        try {
+            return StrUtil.isNotBlank(value) ? IdType.valueOf(value) : IdType.NONE;
+        } catch (IllegalArgumentException ex) {
+            log.error("[getIdType][无法解析 id-type 配置值({})]", value, ex);
+            return IdType.NONE;
+        }
+    }
+
+    public void setIdType(ConfigurableEnvironment environment, IdType idType) {
+        Map<String, Object> map = new HashMap<>();
+        map.put(ID_TYPE_KEY, idType);
+        environment.getPropertySources().addFirst(new MapPropertySource("mybatisPlusIdType", map));
+        log.info("[setIdType][修改 MyBatis Plus 的 idType 为({})]", idType);
+    }
+
+    public void setJobStoreDriverIfPresent(ConfigurableEnvironment environment, DbType dbType) {
+        String driverClass = environment.getProperty(QUARTZ_JOB_STORE_DRIVER_KEY);
+        if (StrUtil.isNotEmpty(driverClass)) {
+            return;
+        }
+        // 根据 dbType 类型，获取对应的 driverClass
+        switch (dbType) {
+            case POSTGRE_SQL:
+                driverClass = "org.quartz.impl.jdbcjobstore.PostgreSQLDelegate";
+                break;
+            case ORACLE:
+            case ORACLE_12C:
+                driverClass = "org.quartz.impl.jdbcjobstore.oracle.OracleDelegate";
+                break;
+            case SQL_SERVER:
+            case SQL_SERVER2005:
+                driverClass = "org.quartz.impl.jdbcjobstore.MSSQLDelegate";
+                break;
+            case DM:
+            case KINGBASE_ES:
+                driverClass = "org.quartz.impl.jdbcjobstore.StdJDBCDelegate";
+                break;
+        }
+        // 设置 driverClass 变量
+        if (StrUtil.isNotEmpty(driverClass)) {
+            environment.getSystemProperties().put(QUARTZ_JOB_STORE_DRIVER_KEY, driverClass);
+        }
+    }
+
+    public static DbType getDbType(ConfigurableEnvironment environment) {
+        String primary = environment.getProperty(DATASOURCE_DYNAMIC_KEY + "." + "primary");
+        if (StrUtil.isEmpty(primary)) {
+            return null;
+        }
+        String url = environment.getProperty(DATASOURCE_DYNAMIC_KEY + ".datasource." + primary + ".url");
+        if (StrUtil.isEmpty(url)) {
+            return null;
+        }
+        return JdbcUtils.getDbType(url);
+    }
+}
+```
+
+这段代码中还存在了一部分与定时任务相关的代码设置环境变量内容，**setJobStoreDriverIfPresent**方法中首先获取**spring.quartz.properties.org.quartz.jobStore.driverDelegateClass**的内容，如果不为空的话优先设置用户在配置文件设置的内容，但是如果是空的话会根据不同的数据源类型设置不同的配置类。PGSQL设置的是：**org.quartz.impl.jdbcjobstore.PostgreSQLDelegate**，其他的类似。最终在启动完成之后会将正在使用的数据源设置到相应部分。
 
 
 
