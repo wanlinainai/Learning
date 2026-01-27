@@ -3301,6 +3301,350 @@ spring:
 >     }
 > ```
 
+#### 订单关单（主动关单、超时关单）
+
+接口位置：`TradeController`
+
+```java
+    @PostMapping("/cancel")
+    public Result<Boolean> cancel(@Valid @RequestBody CancelParam cancelParam) {
+        String userId = (String) StpUtil.getLoginId();
+
+        OrderCancelRequest orderCancelRequest = new OrderCancelRequest();
+        orderCancelRequest.setIdentifier(cancelParam.getOrderId());
+        orderCancelRequest.setOperateTime(new Date());
+        orderCancelRequest.setOrderId(cancelParam.getOrderId());
+        orderCancelRequest.setOperator(userId);
+        orderCancelRequest.setOperatorType(UserType.CUSTOMER);
+
+        OrderResponse orderResponse = RemoteCallWrapper.call(req -> orderFacadeService.cancel(req), orderCancelRequest, "cancelOrder");
+
+        if (orderResponse.getSuccess()) {
+            return Result.success(true);
+        }
+
+        throw new TradeException(TradeErrorCode.ORDER_CANCEL_FAILED);
+    }
+```
+
+之后在Service中向RocketMQ发送消息，
+
+```java
+    private OrderResponse sendTransactionMsgForClose(BaseOrderUpdateRequest request) {
+        //因为RocketMQ 的事务消息中，如果本地事务发生了异常，这里返回也会是个 true，所以就需要做一下反查进行二次判断，才能知道关单操作是否成功
+        //消息监听：TradeOrderListener
+        streamProducer.send("orderClose-out-0", null, JSON.toJSONString(request), "CLOSE_TYPE", request.getOrderEvent().name());
+        TradeOrder tradeOrder = orderReadService.getOrder(request.getOrderId());
+        OrderResponse orderResponse = new OrderResponse();
+        if (tradeOrder.isClosed()) {
+            orderResponse.setSuccess(true);
+        } else {
+            orderResponse.setSuccess(false);
+        }
+        return orderResponse;
+    }
+```
+
+我们发送的是事务消息，在配置文件中设置了事务监听器，自身监听器：`orderCloseTransactionListener`
+
+```yaml
+spring:
+	    stream:
+      rocketmq:
+        bindings:
+          chain-in-0:
+            consumer:
+              subscription:
+                expression: 'COLLECTION || BLIND_BOX' # 这里设置你希望订阅的Tag
+          orderClose-out-0:
+            producer:
+              producerType: Trans
+              transactionListener: orderCloseTransactionListener
+```
+
+这个监听器是发送消息的监听器，使用的是Spring Cloud Stream RocketMQ。这个Bean类继承自TransactionListener（核心）。
+
+这个核心接口实现了两个方法：`executeLocalTransaction`、`checkLocalTransaction`。第一个方法是执行本地事务操作，可以进行commit或者是rollback，第二个是检测机制，RocketMQ会回查消息处理情况。
+
+我们的关单有两个可能的情况：**主动关单**和**超时关单**。
+
+我们在executeTransaction中实现这两个逻辑：
+
+```java
+    @Override
+    public LocalTransactionState executeLocalTransaction(Message message, Object o) {
+        try {
+            Map<String, String> headers = message.getProperties();
+            String closeType = headers.get("CLOSE_TYPE");
+
+            OrderResponse response = null;
+            if (TradeOrderEvent.CANCEL.name().equals(closeType)) {
+                OrderCancelRequest cancelRequest = JSON.parseObject(JSON.parseObject(message.getBody()).getString("body"), OrderCancelRequest.class);
+                logger.info("executeLocalTransaction , baseOrderUpdateRequest = {} , closeType = {}", JSON.toJSONString(cancelRequest), closeType);
+                response = orderManageService.cancel(cancelRequest);
+            } else if (TradeOrderEvent.TIME_OUT.name().equals(closeType)) {
+                OrderTimeoutRequest timeoutRequest = JSON.parseObject(JSON.parseObject(message.getBody()).getString("body"), OrderTimeoutRequest.class);
+                logger.info("executeLocalTransaction , baseOrderUpdateRequest = {} , closeType = {}", JSON.toJSONString(timeoutRequest), closeType);
+                response = orderManageService.timeout(timeoutRequest);
+            } else {
+                throw new UnsupportedOperationException("unsupported closeType " + closeType);
+            }
+
+            if (response.getSuccess()) {
+                return LocalTransactionState.COMMIT_MESSAGE;
+            } else {
+                return LocalTransactionState.ROLLBACK_MESSAGE;
+            }
+        } catch (Exception e) {
+            logger.error("executeLocalTransaction error, message = {}", message, e);
+            return LocalTransactionState.ROLLBACK_MESSAGE;
+        }
+    }
+```
+
+之后的逻辑主要用到了模版方法模式，我们定义一个通用的订单更新逻辑。主要逻辑是：
+
+1. 校验判断：
+   1. 是否存在订单
+   2. 是否存在权限
+   3. 是否存在流水，如果存在直接幂等掉（流水的作用一个是校验幂等，另一个是用来对账和统计）
+2. 单独的逻辑执行（状态流转，关单是订单状态变成**CLOSE**）
+3. 使用编程式事务执行更新订单状态；添加流水记录
+
+如果执行之后提交事务消息：`return LocalTransactionState.COMMIT_MESSAGE;`否则提交rollback消息：`return LocalTransactionState.ROLLBACK_MESSAGE;`
+
+在 checkLocalTransaction 方法中实现逻辑：
+
+```java
+    @Override
+    public LocalTransactionState checkLocalTransaction(MessageExt messageExt) {
+        String closeType = messageExt.getProperties().get("CLOSE_TYPE");
+        BaseOrderUpdateRequest baseOrderUpdateRequest = null;
+        if (TradeOrderEvent.CANCEL.name().equals(closeType)) {
+            baseOrderUpdateRequest = JSON.parseObject(JSON.parseObject(new String(messageExt.getBody())).getString("body"), OrderCancelRequest.class);
+        } else if (TradeOrderEvent.TIME_OUT.name().equals(closeType)) {
+            baseOrderUpdateRequest = JSON.parseObject(JSON.parseObject(new String(messageExt.getBody())).getString("body"), OrderTimeoutRequest.class);
+        }
+
+        TradeOrder tradeOrder = orderReadService.getOrder(baseOrderUpdateRequest.getOrderId());
+
+        if (tradeOrder.getOrderState() == TradeOrderState.CLOSED) {
+            return LocalTransactionState.COMMIT_MESSAGE;
+        }
+
+        return LocalTransactionState.ROLLBACK_MESSAGE;
+    }
+```
+
+主要操作就是拿到消息，之后根据订单号获取订单，查看订单状态是不是CLOSED关单状态，如果已经是的话提交事务消息，否则ROLLBACK。
+
+消费者监听配置：trade模块。
+
+配置文件：
+
+```yaml
+spring:
+	cloud:
+		stream:
+			bindings:
+				  orderClose-in-0:
+          content-type: application/json
+          destination: order-close-topic
+          group: order-group
+          binder: rocketmq
+```
+
+Bean实体类是：`orderClose`。
+
+实际的监听器是：`TradeOrderListener`
+
+执行逻辑：
+
+1. 从消息中获取到实体类。
+2. 获取tradeOrder订单。
+3. 执行MySQL数据库的减少订单操作。
+   1. 校验流水表，如果存在流水直接报错。
+   2. 查询最新的值
+   3. 新增Collection等商品的流水记录。
+   4. 使用hint + 乐观锁的机制进行数据库的更新
+4. Redis中增加库存操作。（使用LUA脚本保证原子性）
+   1. 校验流水表，如果存在流水不能操作。
+   2. 增加库存。
+   3. 使用Hash格式存储日志
+
+```java
+@Slf4j
+@Component
+public class TradeOrderListener extends AbstractStreamConsumer {
+
+    @Autowired
+    private InventoryFacadeService inventoryFacadeService;
+
+    @Autowired
+    private GoodsFacadeService goodsFacadeService;
+
+    @Autowired
+    private OrderFacadeService orderFacadeService;
+
+    @Bean
+    Consumer<Message<MessageBody>> orderClose() {
+        return msg -> {
+            String closeType = msg.getHeaders().get("CLOSE_TYPE", String.class);
+            BaseOrderUpdateRequest orderUpdateRequest;
+            if (TradeOrderEvent.CANCEL.name().equals(closeType)) {
+                orderUpdateRequest = getMessage(msg, OrderCancelRequest.class);
+            } else if (TradeOrderEvent.TIME_OUT.name().equals(closeType)) {
+                orderUpdateRequest = getMessage(msg, OrderTimeoutRequest.class);
+            } else {
+                throw new UnsupportedOperationException("unsupported closeType " + closeType);
+            }
+
+            SingleResponse<TradeOrderVO> response = orderFacadeService.getTradeOrder(orderUpdateRequest.getOrderId());
+            if (!response.getSuccess()) {
+                log.error("getTradeOrder failed,orderCloseRequest:{} , orderQueryResponse : {}", JSON.toJSONString(orderUpdateRequest), JSON.toJSONString(response));
+                throw new TradeException(INVENTORY_ROLLBACK_FAILED);
+            }
+            TradeOrderVO tradeOrderVO = response.getData();
+            if (response.getData().getOrderState() != TradeOrderState.CLOSED) {
+                log.error("trade order state is illegal ,orderCloseRequest:{} , tradeOrderVO : {}", JSON.toJSONString(orderUpdateRequest), JSON.toJSONString(tradeOrderVO));
+                throw new TradeException(INVENTORY_ROLLBACK_FAILED);
+            }
+
+            GoodsSaleRequest goodsSaleRequest = new GoodsSaleRequest(tradeOrderVO);
+            GoodsSaleResponse cancelSaleResult = goodsFacadeService.cancelSale(goodsSaleRequest);
+            if (!cancelSaleResult.getSuccess()) {
+                log.error("cancelSale failed,orderCloseRequest:{} , collectionSaleResponse : {}", JSON.toJSONString(orderUpdateRequest), JSON.toJSONString(cancelSaleResult));
+                throw new TradeException(INVENTORY_ROLLBACK_FAILED);
+            }
+
+            InventoryRequest collectionInventoryRequest = new InventoryRequest(tradeOrderVO);
+            SingleResponse<Boolean> decreaseResponse = inventoryFacadeService.increase(collectionInventoryRequest);
+            if (decreaseResponse.getSuccess()) {
+                log.info("increase success,collectionInventoryRequest:{}", collectionInventoryRequest);
+            } else {
+                log.error("increase inventory failed,orderCloseRequest:{} , decreaseResponse : {}", JSON.toJSONString(orderUpdateRequest), JSON.toJSONString(decreaseResponse));
+                throw new TradeException(INVENTORY_ROLLBACK_FAILED);
+            }
+        };
+    }
+}
+```
+
+数据库的核心逻辑
+
+```java
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public Boolean cancel(GoodsCancelSaleRequest request) {
+        //流水校验
+        CollectionInventoryStream existStream = collectionInventoryStreamMapper.selectByIdentifier(request.identifier(), request.eventType().name(), request.collectionId());
+        if (null != existStream) {
+            return true;
+        }
+
+        //查询出最新的值
+        Collection collection = this.getById(request.collectionId());
+
+        //新增collection流水
+        CollectionInventoryStream stream = new CollectionInventoryStream(collection, request.identifier(), request.eventType(), request.quantity());
+        int result = collectionInventoryStreamMapper.insert(stream);
+        Assert.isTrue(result > 0, () -> new CollectionException(COLLECTION_STREAM_SAVE_FAILED));
+
+        //核心逻辑执行
+        result = collectionMapper.cancel(request.collectionId(), request.quantity());
+        Assert.isTrue(result == 1, () -> new CollectionException(COLLECTION_SAVE_FAILED));
+        return true;
+    }
+```
+
+```xml
+    <!--  库存退还 -->
+    <update id="cancel">
+        UPDATE /*+ COMMIT_ON_SUCCESS ROLLBACK_ON_FAIL TARGET_AFFECT_ROW 1 */ collection
+        SET saleable_inventory = saleable_inventory + #{quantity}, lock_version = lock_version + 1,gmt_modified = now()
+        WHERE id = #{id} and <![CDATA[saleable_inventory + frozen_inventory + #{quantity} <= quantity]]>
+    </update>
+```
+
+redis的核心处理逻辑：
+
+```java
+    @Override
+    public InventoryResponse increase(InventoryRequest request) {
+        InventoryResponse inventoryResponse = new InventoryResponse();
+        String luaScript = """
+                if redis.call('hexists', KEYS[2], ARGV[2]) == 1 then
+                    return redis.error_reply('OPERATION_ALREADY_EXECUTED')
+                end
+                                
+                local current = redis.call('get', KEYS[1])
+                if current == false then
+                    return redis.error_reply('key not found')
+                end
+                if tonumber(current) == nil then
+                    return redis.error_reply('current value is not a number')
+                end
+                                
+                local new = (current == nil and 0 or tonumber(current)) + tonumber(ARGV[1])
+                redis.call('set', KEYS[1], tostring(new))
+                                
+                -- 获取Redis服务器的当前时间（秒和微秒）
+                local time = redis.call("time")
+                -- 转换为毫秒级时间戳
+                local currentTimeMillis = (time[1] * 1000) + math.floor(time[2] / 1000)
+                                
+                -- 使用哈希结构存储日志
+                redis.call('hset', KEYS[2], ARGV[2], cjson.encode({
+                    action = "increase",
+                    from = current,
+                    to = new,
+                    change = ARGV[1],
+                    by = ARGV[2],
+                    timestamp = currentTimeMillis
+                }))
+                                
+                return new
+                """;
+
+        try {
+            Integer result = ((Long) redissonClient.getScript().eval(RScript.Mode.READ_WRITE,
+                    luaScript,
+                    RScript.ReturnType.INTEGER,
+                   	// KEYS[1...n]
+                    Arrays.asList(getCacheKey(request), getCacheStreamKey(request)),
+                    // ARGV[1...n]
+                    request.getInventory(), "INCREASE_" + request.getIdentifier())).intValue();
+
+            inventoryResponse.setSuccess(true);
+            inventoryResponse.setGoodsId(request.getGoodsId());
+            inventoryResponse.setGoodsType(request.getGoodsType());
+            inventoryResponse.setIdentifier(request.getIdentifier());
+            inventoryResponse.setInventory(result);
+            return inventoryResponse;
+
+        } catch (RedisException e) {
+            logger.error("increase error , goodsId = {} , identifier = {} ,", request.getGoodsId(), request.getIdentifier(), e);
+            inventoryResponse.setSuccess(false);
+            inventoryResponse.setGoodsId(request.getGoodsId());
+            inventoryResponse.setGoodsType(request.getGoodsType());
+            inventoryResponse.setIdentifier(request.getIdentifier());
+            if (e.getMessage().startsWith(ERROR_CODE_KEY_NOT_FOUND)) {
+                inventoryResponse.setResponseCode(ERROR_CODE_KEY_NOT_FOUND);
+            } else if (e.getMessage().startsWith(ERROR_CODE_OPERATION_ALREADY_EXECUTED)) {
+                inventoryResponse.setResponseCode(ERROR_CODE_OPERATION_ALREADY_EXECUTED);
+                inventoryResponse.setSuccess(true);
+            } else {
+                inventoryResponse.setResponseCode(BIZ_ERROR.name());
+            }
+            inventoryResponse.setResponseMessage(e.getMessage());
+
+            return inventoryResponse;
+        }
+    }
+```
+
+
+
 
 
 ### 藏品管理功能设计
