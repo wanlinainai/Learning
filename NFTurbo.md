@@ -183,6 +183,147 @@ Spring3.0之后需要创建：`org.springframework.boot.autoconfigure.AutoConfig
 >
 > 传统的Spring.factories是依赖于运行时扫描加载自动配置类，这么做的话效率不是很高。使用SpringBoot 3 的话，可以在编译时确定自动配置类，减少了运行时的开销，并使得像GraalVM这种工具更容易分析和编译Spring Boot应用到原生镜像。这种方式的话可以带来更快的启动时间和更低的内存消耗，对于可扩展性来说非常重要。
 
+### MapStruct对象转换
+
+为了减少对象的set、get方法。
+
+我们有一个基本类：`UserMapStruct`。
+
+```java
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class UserMapStruct implements Serializable {
+    private static final long serialVersionUID = 1L;
+    
+    private String name;
+    
+    private String phone;
+    
+    private String email;
+    
+    private String address;
+    
+    private Long sex;
+}
+```
+
+其中存在5个属性和一个方法。如果我们需要返回的对象中不包括sex属性或者是尽数包含，使用强转即可。代码如下：
+
+```java
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@ToString
+public class UserMapStructVo implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+    
+    private String name;
+    
+    private String phone;
+    
+    private String email;
+    
+    private String address;   
+}
+```
+
+定义一个对象转换类：`UserMapStructConvertor`。如果有的属性数量少，需要放在反参中，参数多的需要在入参中。
+
+```java
+@Mapper(nullValueCheckStrategy = NullValueCheckStrategy.ALWAYS)
+public interface UserMapStructConvertor {
+    UserMapStructConvertor INSTANCE = Mappers.getMapper(UserMapStructConvertor.class);
+
+    /**
+     * UserMapStruct 转换为 UserMapStructVo（字段数量不一致，只能从多的转成少的）
+     * @param userMapStruct
+     * @return
+     */
+    UserMapStructVo toConvertor(UserMapStruct userMapStruct);
+}
+```
+
+接口：`http://localhost:9088/test/getUserMapStruct`
+
+```java
+    @GetMapping("/getUserMapStruct")
+    public Result<UserMapStructVo> getUserMapStruct() {
+        UserMapStruct userMapStruct = new UserMapStruct();
+        userMapStruct.setName("张三");
+        userMapStruct.setPhone("12345678901");
+        userMapStruct.setEmail("<EMAIL>");
+        userMapStruct.setSex(1L);
+        
+        UserMapStructVo userMapStructVo = UserMapStructConvertor.INSTANCE.toConvertor(userMapStruct);
+        return Result.success(userMapStructVo);
+    }
+```
+
+结果：![image-20260127113701987](NFTurbo/image-20260127113701987.png)
+
+重新定义一个类：`UserMapStructVo2`。其中包含三个属性：`name`、`phone`、`timeout`。
+
+```java
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@ToString
+public class UserMapStructVo2 implements Serializable {
+    private static final long serialVersionUID = 1L;
+    
+    private String name;
+
+    private String phone;
+    
+    private Boolean timeout;
+}
+```
+
+这个timeout在实体类`UserMapStruct`不存在。如何获取呢？
+
+通过在`UserMapStruct`类中加一个方法作为表达式，用`@Mapping(target = "timeout", expression = "java(userMapStruct.isTimeout)")`表示映射。
+
+**UserMapStruct**添加方法：
+
+```java
+    public Boolean isTimeout() {
+        // 做相应的业务逻辑
+        return false; // return true;
+    }
+```
+
+**UserMapStructConvertor**添加方法：
+
+```java
+/**
+     * 需要加上@Mapping(target = "timeout", expression = "java(userMapStruct.isTimeout())")方法做映射，通过isTimeout()方法得到返回值设置到UserMapStructVo2的timeout字段
+     * @param userMapStruct
+     * @return
+     */
+    @Mapping(target = "timeout", expression = "java(userMapStruct.isTimeout())")
+    UserMapStructVo2 toConvertor2(UserMapStruct userMapStruct);
+```
+
+接口：`http://localhost:9088/test/getUserMapStruct2`
+
+```java
+    @GetMapping("/getUserMapStruct2")
+    public Result<UserMapStructVo2> getUserMapStruct2() {
+        UserMapStruct userMapStruct = new UserMapStruct();
+        userMapStruct.setName("张三");
+        userMapStruct.setPhone("12345678901");
+        userMapStruct.setEmail("<EMAIL>");
+        userMapStruct.setSex(1L);
+
+        UserMapStructVo2 convertor2 = UserMapStructConvertor.INSTANCE.toConvertor2(userMapStruct);
+        return Result.success(convertor2);
+    }
+```
+
+结果：![image-20260127114224783](NFTurbo/image-20260127114224783.png)
+
 ### 限流
 
 #### 令牌桶进行限流（令牌桶 + 时间窗口）
@@ -3643,9 +3784,79 @@ redis的核心处理逻辑：
     }
 ```
 
+#### 分页查询订单列表
 
+接口位置：`/order/orderList`。
 
+主要还是利用到了mybatis-Plus和MapStruct来做分页。
 
+```java
+    @Override
+    @Facade
+    public PageResponse<TradeOrderVO> pageQuery(OrderPageQueryRequest request) {
+        Page<TradeOrder> tradeOrderPage = orderReadService.pageQueryByState(request.getBuyerId(), request.getState(), request.getCurrentPage(), request.getPageSize());
+        List<TradeOrderVO> tradeOrderVos = TradeOrderConvertor.INSTANCE.mapToVo(tradeOrderPage.getRecords());
+        tradeOrderVos.forEach(tradeOrderVO -> tradeOrderVO.setSellerName(getSellerName(tradeOrderVO)));
+        return PageResponse.of(tradeOrderVos, (int) tradeOrderPage.getTotal(), request.getPageSize(), request.getCurrentPage());
+    }
+```
+
+```java
+    public Page<TradeOrder> pageQueryByState(String buyerId, String state, int currentPage, int pageSize) {
+        Page<TradeOrder> page = new Page<>(currentPage, pageSize);
+        QueryWrapper<TradeOrder> wrapper = new QueryWrapper<>();
+        wrapper.eq("buyer_id", buyerId);
+        if (state != null) {
+            wrapper.eq("order_state", state);
+        } else {
+            //不查询 CREATE 的订单
+            wrapper.in("order_state", TradeOrderState.CONFIRM.name(), TradeOrderState.PAID.name(), TradeOrderState.FINISH.name(), TradeOrderState.CLOSED.name());
+        }
+        wrapper.orderBy(true, false, "gmt_create");
+
+        return this.page(page, wrapper);
+    }
+```
+
+> 不需要查询 create 状态的订单。this.page(传入page对象，拼接的SQL条件)。
+
+拿到了**TradeOrder**对象列表。但是我们需要返回的对象是**TradeOrderVO**。使用**MapStruct**进行对象的转换。详情见：[MapStruct](#MapStruct对象转换)。最后返回我们自定义的分页结果类：`PageResponse`。
+
+```java
+@Setter
+@Getter
+public class PageResponse<T> extends MultiResponse<T> {
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * 当前页
+     */
+    private int currentPage;
+    /**
+     * 每页结果数
+     */
+    private int pageSize;
+    /**
+     * 总页数
+     */
+    private int totalPage;
+    /**
+     * 总数
+     */
+    private int total;
+
+    public static <T> PageResponse<T> of(List<T> datas, int total, int pageSize,int currentPage) {
+        PageResponse<T> pageResponse = new PageResponse<>();
+        pageResponse.setSuccess(true);
+        pageResponse.setDatas(datas);
+        pageResponse.setTotal(total);
+        pageResponse.setPageSize(pageSize);
+        pageResponse.setCurrentPage(currentPage);
+        pageResponse.setTotalPage((pageSize + total - 1) / pageSize);
+        return pageResponse;
+    }
+}
+```
 
 ### 藏品管理功能设计
 
