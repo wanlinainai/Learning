@@ -324,6 +324,23 @@ public class UserMapStructVo2 implements Serializable {
 
 结果：![image-20260127114224783](NFTurbo/image-20260127114224783.png)
 
+### XXL-JOB分片
+
+分片广播也就是分片任务，将一个大任务拆分成多个子任务并行执行。
+
+主要就是获取分片参数：
+
+1. `int shardIndex = XxlJobHelper.getShardIndex()`得到序列号
+2. `int shardTotal =XxlJobHelper.getShardTotal()`得到分片总数
+
+之后根据不同的分片处理不同的逻辑。
+
+执行原理：
+
+- 任务配置和分发：在xxl-job调度中心中，用户通过web页面创建一个分片广播的任务。设置分片总数等。一旦调度任务被触发，调度中心会自动将这个任务进行广播。
+- 分片参数传递：每一个执行器在接收到广播任务时，自动获取到分片参数，包括分片总数和当前分片序号。这些参数由XXL JOB 自动注入。
+- 分片逻辑执行：实际的分片需要处理的逻辑需要在执行器的任务器代码中实现，开发者需要根据分片序号和总数决定处理哪些数据。
+
 ### 限流
 
 #### 令牌桶进行限流（令牌桶 + 时间窗口）
@@ -3783,6 +3800,86 @@ redis的核心处理逻辑：
         }
     }
 ```
+
+#### 主动 + 被动的方式实现订单的关单
+
+##### 被动关单
+
+被动关单主要涉及的位置是在：
+
+1. 用户点击付款的时候
+2. 用户查询订单详情的时候
+
+在用户点击付款之前，先进行超时关单的判断限制，异步关单（做到不影响主业务）。首先确保订单状态属于CONFIRM，并且达到超时时间。
+
+```java
+private void doAsyncTimeoutOrder(TradeOrderVO tradeOrderVO) {
+        if (tradeOrderVO.getOrderState() != TradeOrderState.CLOSED) {
+            Thread.ofVirtual().start(() -> {
+                OrderTimeoutRequest cancelRequest = new OrderTimeoutRequest();
+                cancelRequest.setOperatorType(PLATFORM);
+                cancelRequest.setOperator(PLATFORM.getDesc());
+                cancelRequest.setOrderId(tradeOrderVO.getOrderId());
+                cancelRequest.setOperateTime(new Date());
+                cancelRequest.setIdentifier(UUID.randomUUID().toString());
+                orderFacadeService.timeout(cancelRequest);
+            });
+        }
+    }
+```
+
+> 使用虚拟线程异步的方式进行设置关单操作。主线程会抛出异常，告知订单已关闭即可。用户再次刷新订单就已经关闭了。
+
+用户查看详情的时候超时关单。
+
+如果用户点击订单的详情，会进入到订单的详情页面，此时我们依旧会进行超时关单的判断逻辑。
+
+逻辑还是一样，不过这次是需要同步，因为展示页面的话需要给用户展示出来是否已经关单。
+
+```java
+String userId = (String) StpUtil.getLoginId();
+        SingleResponse<TradeOrderVO> singleResponse = orderFacadeService.getTradeOrder(orderId, userId);
+        if (singleResponse.getSuccess()) {
+            TradeOrderVO tradeOrderVO = singleResponse.getData();
+            if (tradeOrderVO == null) {
+                return Result.error("ORDER_NOT_EXIST", "订单不存在");
+            }
+            if (tradeOrderVO.getTimeout() && tradeOrderVO.getOrderState() == TradeOrderState.CONFIRM) {
+                //如果订单已经超时，并且尚未关闭，则执行一次关单后再返回数据
+                OrderTimeoutRequest timeoutRequest = new OrderTimeoutRequest();
+                timeoutRequest.setOperatorType(PLATFORM);
+                timeoutRequest.setOperator(PLATFORM.getDesc());
+                timeoutRequest.setOrderId(tradeOrderVO.getOrderId());
+                timeoutRequest.setOperateTime(new Date());
+                timeoutRequest.setIdentifier(UUID.randomUUID().toString());
+                // 超时关单操作
+                orderFacadeService.timeout(timeoutRequest);
+                singleResponse = orderFacadeService.getTradeOrder(orderId, userId);
+            }
+            return Result.success(singleResponse.getData());
+        } else {
+            return Result.error(singleResponse.getResponseCode(), singleResponse.getResponseMessage());
+        }
+```
+
+##### 主动关单
+
+使用xxl-job实现快速扫表，设计的是分库分表的设计，可以借助XXL-JOB的分片功能。参考[XXL-JOB分片广播](#XXL-JOB分片)
+
+**生产者**
+
+1. 获取job的分片索引和大小
+2. 如果索引对应的上，即可进行操作，下一步
+3. 先获取到所有的超时订单
+4. 将所有的超时订单设置到阻塞队列中（生产者）；为了更加健全，防止在关单的时候出现新的关单订单，在进行一次查询需要关单的逻辑，不过不是从最开始查询，是从当前的订单中的最大ID开始查询
+5. 设置毒丸终止对象POISON
+6. 执行forkJoinPool任务
+
+**消费者**
+
+1. 从阻塞队列中获取订单
+2. 如果遇到毒丸对象说明结束了，优雅结束
+3. 重新查询一遍当前订单是否已经支付，如果没有的话才可以执行关单操作。关单操作详见[关单](#订单关单（主动关单、超时关单）)的**sendTransactionMsgForClose**方法。
 
 #### 分页查询订单列表
 
