@@ -3989,13 +3989,42 @@ public class PageResponse<T> extends MultiResponse<T> {
 >
 > 为了减少延迟的问题，我们也是设计了上述的主动关单的操作，用户在支付和查看订单详情的时候进行主动关单。
 
-
-
-
-
-
-
 ### 藏品管理功能设计
+
+
+
+
+
+
+
+### 支付模块
+
+pay模块。
+
+##### 模型设计
+
+模型设计中，主要存在的就是两张表：`pay_order`、`refund_order`.
+
+![image-20260128232230005](images/NFTurbo/image-20260128232230005.png)
+
+在设计支付单（**pay_order**）的时候，我们为了实现通用性，完全没有任何与订单相关的字段属性（名称），付款方不是buyer_id，而是payer_id，订单号不是order_id，而是biz_no（业务单号）。
+
+同时为了支持退款，还有一张退款单。
+
+##### 状态机
+
+总共存在6种支付状态：
+
+1. TO_PAY（待支付）
+2. PAYING（支付中）
+3. PAID（已付款）
+4. FAILED（支付失败）
+5. EXPIRED（支付超时）
+6. REFUNDED（退款）
+
+状态图如下所示：
+
+![image-20260128233502488](images/NFTurbo/image-20260128233502488.png)
 
 
 
