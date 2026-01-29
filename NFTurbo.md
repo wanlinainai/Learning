@@ -3507,7 +3507,8 @@ spring:
 
 ```yaml
 spring:
-	    stream:
+  cloud:
+    stream:
       rocketmq:
         bindings:
           chain-in-0:
@@ -3605,11 +3606,11 @@ spring:
 	cloud:
 		stream:
 			bindings:
-				  orderClose-in-0:
-          content-type: application/json
-          destination: order-close-topic
-          group: order-group
-          binder: rocketmq
+			  orderClose-in-0:
+              content-type: application/json
+              destination: order-close-topic
+              group: order-group
+              binder: rocketmq
 ```
 
 Bean实体类是：`orderClose`。
