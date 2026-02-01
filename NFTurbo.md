@@ -4190,9 +4190,92 @@ public class RefundOrderRetryJob {
 }
 ```
 
+##### 前段1S一次轮训支付是否成功
 
+```javascript
+// 支付回回调
+confirmPay() {
+				this.$u.post('/trade/pay', {
+					orderId: this.orderId,
+					payChannel: 'WECHAT',
+					token: this.checkToken
+				}).then(res => {
+					if(res.success) {
+						this._orderData = res.data;
+						this.showPayModalFlag = false;
+						this.showPayQRCode = true;
+						
+						const payQRCodeURL = res.data.payUrl;
+						this.payOrderId = res.data.payOrderId;
+						
+						setTimeout(() => {
+							new QRCode(this.$refs.qrcodeImg, {
+								text: payQRCodeURL,
+								width: 170,
+								height: 170
+							})
+						}, 300);
+						
+						// 设置 1S 轮询时间
+						setInterval(() => {
+							if(this.paySuccess == false) {
+								this.payFinishAutoCheck();
+							}
+						}, 1000);
+						
+						return;
+					}
+					
+					if(res.msg == "未能读取到有效 token"){
+						uni.showToast({
+							icon: 'error',
+							title: '请先登录！',
+							duration: 2000
+						});
+					}else{
+						uni.showToast({
+							icon: 'error',
+							title: res.msg,
+							duration: 2000
+						});
+					}
 
+				});
+			},			
 
+// 查询后端接口检查支付状态
+payFinishAutoCheck() {
+				this.$u.get('/order/getPayStatus', {
+					payOrderId: this.payOrderId,
+				}).then(res => {
+					if(res.data.orderState !== 'FINISH' && res.data.orderState !== 'PAID' ) {		
+						return;
+					}
+				
+					this.showPayQRCode = false;
+					this.paySuccess = true;
+					
+					uni.navigateTo({
+						url: '/pages/payFinish'
+					});
+					
+				});
+			},
+```
+
+> 上述的支付回调部分有一个setInterval部分，是1S一次进行轮训调用后端接口检查。后端接口：`/order/getPayStatus`。代码见下方
+
+```java
+    @GetMapping("/getPayStatus")
+    public Result<PayOrderVO> getPayStatus(@NotNull String payOrderId) {
+        // 还是为了防止用户水平越权，查询到别人的订单
+        String userId = (String) StpUtil.getLoginId();
+        SingleResponse<PayOrderVO> singleResponse = payFacadeService.queryPayOrder(payOrderId, userId);
+        return new Result(singleResponse);
+    }
+```
+
+业务逻辑层不再写出来了，主要内容就是根据买家ID 和 订单号进行支付单的查询，一般是只能查询到一条数据。前端拿到数据之后判断orderState状态是不是FINISH 或者 PAID。如果不是的话直接Return ，等待下一次的轮训重新查询。如果是的话跳转到支付成功页面。
 
 
 
