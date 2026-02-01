@@ -3507,7 +3507,8 @@ spring:
 
 ```yaml
 spring:
-	    stream:
+  cloud:
+    stream:
       rocketmq:
         bindings:
           chain-in-0:
@@ -3605,11 +3606,11 @@ spring:
 	cloud:
 		stream:
 			bindings:
-				  orderClose-in-0:
-          content-type: application/json
-          destination: order-close-topic
-          group: order-group
-          binder: rocketmq
+			  orderClose-in-0:
+              content-type: application/json
+              destination: order-close-topic
+              group: order-group
+              binder: rocketmq
 ```
 
 Bean实体类是：`orderClose`。
@@ -3881,6 +3882,40 @@ String userId = (String) StpUtil.getLoginId();
 2. 如果遇到毒丸对象说明结束了，优雅结束
 3. 重新查询一遍当前订单是否已经支付，如果没有的话才可以执行关单操作。关单操作详见[关单](#订单关单（主动关单、超时关单）)的**sendTransactionMsgForClose**方法。
 
+> 为什么不用MQ做支付单的过期关闭？
+>
+> 一种是基于延迟消息，一种是基于定时任务。
+>
+> - 延迟消息
+>   - kafka基于自己的时间轮实现
+>   - RocketMQ延迟消息/定时消息
+>   - RabbitMQ死信队列
+>   - Redis过期机制
+> - 定时任务
+>   - XXL-JOB
+>   - 时间轮
+>   - Redis的ZSet
+>   - Redisson延迟队列
+>   - DelayQueue
+>
+> 项目中使用到了RocketMQ，但是为什么不用MQ来实现订单的自动关单呢？
+>
+> 一个是参考了阿里巴巴的内部超时关单的逻辑，阿里内部没有使用MQ，使用的是自研的TOC（timeout center），还是基于定时任务来实现的。
+>
+> 1. 可靠性问题（重要）：虽然消息队列一般来说可靠性比较高，虽然说MQ消息的可靠性比较高，但是不能保证100%不丢失消息，在极端情况下还是会存在丢消息的风险。
+> 2. 大量无效消息：使用MQ实现订单定时关单需要将订单消息放入到MQ中，但是大部分订单会提前取消或者完成支付，这就会导致很多无效的消息。
+>
+> 我们同样使用定时任务的方式，业务量也没有那么大。
+>
+> 同样使用定时任务的话也会存在自己的缺点。
+>
+> 1. 延迟问题：定时任务没有办法控制订单在创建之后到期之后即时取消，存在延迟。
+> 2. 性能问题：如果表中的数量比较大的话，可能会带来性能问题，可能导致进一步的堆积。
+>
+> 为了减少这些问题的影响，首先采取的措施就是使用XXL-JOB的分片任务，利用集群的能力加速扫表。同时采用生产者 + 消费者的模式让扫表和消费之间解耦，并且在消费的时候采用forkJoinPool进行并发消费，提升效率。
+>
+> 为了减少延迟的问题，我们也是设计了上述的主动关单的操作，用户在支付和查看订单详情的时候进行主动关单。
+
 #### 分页查询订单列表
 
 接口位置：`/order/orderList`。
@@ -3955,40 +3990,6 @@ public class PageResponse<T> extends MultiResponse<T> {
 }
 ```
 
-> 为什么不用MQ做支付单的过期关闭？
->
-> 一种是基于延迟消息，一种是基于定时任务。
->
-> - 延迟消息
->   - kafka基于自己的时间轮实现
->   - RocketMQ延迟消息/定时消息
->   - RabbitMQ死信队列
->   - Redis过期机制
-> - 定时任务
->   - XXL-JOB
->   - 时间轮
->   - Redis的ZSet
->   - Redisson延迟队列
->   - DelayQueue
->
-> 项目中使用到了RocketMQ，但是为什么不用MQ来实现订单的自动关单呢？
->
-> 一个是参考了阿里巴巴的内部超时关单的逻辑，阿里内部没有使用MQ，使用的是自研的TOC（timeout center），还是基于定时任务来实现的。
->
-> 1. 可靠性问题（重要）：虽然消息队列一般来说可靠性比较高，虽然说MQ消息的可靠性比较高，但是不能保证100%不丢失消息，在极端情况下还是会存在丢消息的风险。
-> 2. 大量无效消息：使用MQ实现订单定时关单需要将订单消息放入到MQ中，但是大部分订单会提前取消或者完成支付，这就会导致很多无效的消息。
->
-> 我们同样使用定时任务的方式，业务量也没有那么大。
->
-> 同样使用定时任务的话也会存在自己的缺点。
->
-> 1. 延迟问题：定时任务没有办法控制订单在创建之后到期之后即时取消，存在延迟。
-> 2. 性能问题：如果表中的数量比较大的话，可能会带来性能问题，可能导致进一步的堆积。
->
-> 为了减少这些问题的影响，首先采取的措施就是使用XXL-JOB的分片任务，利用集群的能力加速扫表。同时采用生产者 + 消费者的模式让扫表和消费之间解耦，并且在消费的时候采用forkJoinPool进行并发消费，提升效率。
->
-> 为了减少延迟的问题，我们也是设计了上述的主动关单的操作，用户在支付和查看订单详情的时候进行主动关单。
-
 ### 藏品管理功能设计
 
 
@@ -4025,6 +4026,169 @@ pay模块。
 状态图如下所示：
 
 ![image-20260128233502488](images/NFTurbo/image-20260128233502488.png)
+
+#### 重复支付问题
+
+项目中集成了多种支付方式，微信、支付宝、银联等。
+
+在生成支付链接的时候对订单号做了加锁和接口幂等判断。
+
+![image-20260129161940491](NFTurbo/image-20260129161940491.png)
+
+在`create`创建支付单的时候我们进行了判断，
+
+![image-20260129162113461](NFTurbo/image-20260129162113461.png)
+
+```java
+        PayOrder existPayOrder = payOrderMapper.selectByBizNoAndPayer(payCreateRequest.getPayerId(), payCreateRequest.getBizNo(), payCreateRequest.getBizType().name(), payCreateRequest.getPayChannel().name());
+```
+
+可以看到判断是通过`payer_id`、`biz_no`、`biz_type`、`pay_channel`来筛选的，如果用户在使用微信支付的时候网络波动导致微信支付回调很慢，结果用户退出之后更欢支付方式为支付宝，重新支付，结果成功支付了。
+
+之后的逻辑就是针对用户的付账请求生成支付链接。
+
+支付成功之后回调接口：`/wxPay/payNotify`(微信举例)。
+
+```java
+    @RequestMapping(value = "/payNotify", method = {RequestMethod.POST, RequestMethod.GET})
+    @ResponseBody
+    public void payNotify(HttpServletRequest request, HttpServletResponse response) {
+        PayChannelService wxPayChannelService = payChannelServiceFactory.get(PayChannel.WECHAT);
+        boolean result = wxPayChannelService.notify(request, response);
+        if (!result) {
+            response.setStatus(HTTP_SERVER_ERROR_CODE);
+        }
+    }
+```
+
+> 获取到对应的WECHAT支付渠道实现类，之后进行通知。
+>
+> 如何获取到WECHAT渠道实现类的呢？通过工厂模式，在应用启动的时候将所有的`PayChannelService`注册到一个HashMap中，之后在这个工厂处理类中按照不同的支付类型进行获取即可。代码如下：
+>
+> ```java
+> @Service
+> public class PayChannelServiceFactory {
+> 
+>     // 此处的Map是通过Spring 容器自动注入的，当Key是String类型，值是Interface接口类型的时候，在Spring 容器启动的时候会自动将实现这个接口的实现类添加到Map中，
+>     // Key 指的是BeanName， value 指的是Bean实例对象。
+>     @Autowired
+>     private final Map<String, PayChannelService> serviceMap = new ConcurrentHashMap<String, PayChannelService>();
+> 
+>     @Value("${spring.profiles.active}")
+>     private String profile;
+> 
+>     public PayChannelService get(PayChannel payChannel) {
+> 
+>         if (PROFILE_DEV.equals(profile)) {
+>             return serviceMap.get("mockPayChannelService");
+>         }
+> 
+>         String beanName = BeanNameUtils.getBeanName(payChannel.name(), "PayChannelService");
+> 
+>         //组装出beanName，并从map中获取对应的bean
+>         PayChannelService payChannelService = serviceMap.get(beanName);
+> 
+>         if (payChannelService != null) {
+>             return payChannelService;
+>         } else {
+>             throw new UnsupportedOperationException(
+>                     "No PayChannelService Found With payChannel : " + payChannel + " , beanName : " + beanName);
+>         }
+>     }
+> }
+> ```
+
+在用户回调成功走到支付成功的逻辑中。
+
+![image-20260129164421661](NFTurbo/image-20260129164421661.png)
+
+其中画框部分指的是订单模块的支付成功处理，在这个处理中，需要就是：
+
+1. 订单业务逻辑推动，状态流转到PAID。更新订单和订单流水操作。
+2. 订单处理完成之后，拿到这个订单，做出相应判断：
+   1. 订单不是空且订单已经关闭
+   2. 订单不为空且已经支付；支付流水号和支付渠道相同
+   3. 订单不为空且已经支付；支付流水号和支付渠道不同
+
+如果订单已经被其他的支付推进到支付成功，或者已经是关单的状态，需要启动退款流程。
+
+退款步骤代码如下：很简单，就是构造退款参数同时使用异步线程处理退款请求即可。
+
+```java
+    private void doChargeBack(PaySuccessEvent paySuccessEvent, TradeOrderVO tradeOrderVO) {
+        RefundCreateRequest refundCreateRequest = new RefundCreateRequest();
+        refundCreateRequest.setIdentifier(paySuccessEvent.getChannelStreamId());
+        refundCreateRequest.setMemo(REFUND_MEMO_PREFIX + tradeOrderVO.getOrderId());
+        refundCreateRequest.setPayOrderId(paySuccessEvent.getPayOrderId());
+        refundCreateRequest.setRefundAmount(paySuccessEvent.getPaidAmount());
+        refundCreateRequest.setRefundChannel(paySuccessEvent.getPayChannel());
+        RefundOrder refundOrder = refundOrderService.create(refundCreateRequest);
+        Assert.notNull(refundOrder, () -> new BizException(PayErrorCode.REFUND_CREATE_FAILED));
+
+        //异步进行退款执行，失败了交给定时任务重试
+        Thread.ofVirtual().start(() -> {
+            RefundChannelRequest refundChannelRequest = new RefundChannelRequest();
+            refundChannelRequest.setRefundOrderId(refundOrder.getRefundOrderId());
+            refundChannelRequest.setPaidAmount(MoneyUtils.yuanToCent(refundOrder.getPaidAmount()));
+            refundChannelRequest.setPayChannelStreamId(refundOrder.getPayChannelStreamId());
+            refundChannelRequest.setPayOrderId(refundOrder.getPayOrderId());
+            refundChannelRequest.setRefundAmount(MoneyUtils.yuanToCent(refundOrder.getApplyRefundAmount()));
+            refundChannelRequest.setRefundReason(refundOrder.getMemo());
+
+            RefundChannelResponse refundChannelResponse = payChannelServiceFactory.get(paySuccessEvent.getPayChannel()).refund(refundChannelRequest);
+
+            if (refundChannelResponse.getSuccess()) {
+                refundOrderService.refunding(refundOrder.getRefundOrderId());
+            }
+        });
+    }
+```
+
+##### 定时任务扫表退款
+
+针对refundOrder退款表进行扫表处理，按照分页查询的方式进行一批一批的处理，默认一批大小是100条，之后就是执行 **refund** 退款操作了，没啥可说的。
+
+```java
+@Component
+public class RefundOrderRetryJob {
+    @Autowired
+    private RefundOrderService refundOrderService;
+    @Autowired
+    @Lazy
+    private PayChannelServiceFactory payChannelServiceFactory;
+    private static final int PAGE_SIZE = 100;
+    private static final Logger LOG = LoggerFactory.getLogger(RefundOrderRetryJob.class);
+    
+    @XxlJob("refundOrderRetryJob")
+    public ReturnT<String> execute() {
+        List<RefundOrder> refundOrders = refundOrderService.pageQueryNeedRetryOrders(PAGE_SIZE, null);
+        while (CollectionUtils.isNotEmpty(refundOrders)) {
+            refundOrders.forEach(this::executeSingle);
+            Long maxId = refundOrders.stream().mapToLong(RefundOrder::getId).max().orElse(Long.MAX_VALUE);
+            refundOrders = refundOrderService.pageQueryNeedRetryOrders(PAGE_SIZE, maxId + 1);
+        }
+        return ReturnT.SUCCESS;
+    }
+
+    private void executeSingle(RefundOrder refundOrder) {
+        LOG.info("start to execute refund , orderId is {}", refundOrder.getPayOrderId());
+
+        RefundChannelRequest refundChannelRequest = new RefundChannelRequest();
+        refundChannelRequest.setRefundOrderId(refundOrder.getRefundOrderId());
+        refundChannelRequest.setPaidAmount(MoneyUtils.yuanToCent(refundOrder.getPaidAmount()));
+        refundChannelRequest.setPayChannelStreamId(refundOrder.getPayChannelStreamId());
+        refundChannelRequest.setPayOrderId(refundOrder.getPayOrderId());
+        refundChannelRequest.setRefundAmount(MoneyUtils.yuanToCent(refundOrder.getApplyRefundAmount()));
+        refundChannelRequest.setRefundReason(refundOrder.getMemo());
+
+        RefundChannelResponse refundChannelResponse = payChannelServiceFactory.get(refundOrder.getRefundChannel()).refund(refundChannelRequest);
+
+        if (refundOrder.getRefundOrderState() == PayRefundOrderState.TO_REFUND && refundChannelResponse.getSuccess()) {
+            refundOrderService.refunding(refundOrder.getRefundOrderId());
+        }
+    }
+}
+```
 
 
 
