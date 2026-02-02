@@ -4277,13 +4277,71 @@ payFinishAutoCheck() {
 
 业务逻辑层不再写出来了，主要内容就是根据买家ID 和 订单号进行支付单的查询，一般是只能查询到一条数据。前端拿到数据之后判断orderState状态是不是FINISH 或者 PAID。如果不是的话直接Return ，等待下一次的轮训重新查询。如果是的话跳转到支付成功页面。
 
+#### Mock支付渠道
 
+我们的支付渠道是存在一种Mock情况的，用于测试。怎么做的呢？
 
-修改邮箱
+如果我们需要使用Mock支付，需要在启动参数中加上`-Dspring.profiles.active=dev`。
 
+先查看支付方法：pay。
 
+```java
+    @Override
+    public PayChannelResponse pay(PayChannelRequest payChannelRequest) {
+        PayChannelResponse payChannelResponse = new PayChannelResponse();
+        payChannelResponse.setSuccess(true);
+        payChannelResponse.setPayUrl("http://www.nfturbo.com");
+        Map<String, Serializable> params = new HashMap<>(12);
+        params.put("payOrderId", payChannelRequest.getOrderId());
+        params.put("paidAmount", payChannelRequest.getAmount());
+        context.set(params);
 
+        //异步线程延迟3秒钟之后调用 notify 方法
+        scheduler.schedule(() -> {
+            this.notify(null, null);
+        }, 3, TimeUnit.SECONDS);
 
+        return payChannelResponse;
+    }
+```
+
+> 由于需要一个支付获取URL的结果，我们直接设置Success是true，支付回调随便写一个。因为我们之后不会用到这个支付链接。
+>
+> 之后使用异步线程池延时 3S 之后通知成功，通知的参数全部设置成**null**。看一下`notify`方法。
+
+```java
+@Override
+    public boolean notify(HttpServletRequest request, HttpServletResponse response) {
+        try {
+            PaySuccessEvent paySuccessEvent = new PaySuccessEvent();
+            paySuccessEvent.setChannelStreamId(UUID.randomUUID().toString());
+            Map<String, Serializable> params = (Map<String, Serializable>) context.get();
+            paySuccessEvent.setPaidAmount(MoneyUtils.centToYuan((Long) params.get("paidAmount")));
+            paySuccessEvent.setPayOrderId((String) params.get("payOrderId"));
+            paySuccessEvent.setPaySucceedTime(new Date());
+            paySuccessEvent.setPayChannel(PayChannel.MOCK);
+            boolean paySuccessResult = payApplicationService.paySuccess(paySuccessEvent);
+        } catch (Exception e) {
+            log.error("nofity error", e);
+            return false;
+        }
+        return true;
+    }
+```
+
+> 为了最后的paySuccess方法，需要构造一个paySuccessEvent参数。其中这个`paySuccess`需要的最重要的参数是：payOrderId、paySucceedTime、channelStreamId、paidAmount。其实就是对应上述的set参数。
+>
+> 那么如何构造payOrderId和paidAmount呢？最容易想到的方式是通过构造一个Request，从这个Request中得到参数即可。但是这个HttpServletRequest 实在是太过于复杂。构造器来很麻烦，本身就是只需要两个参数，为什么还需要这么麻烦呢？
+>
+> 由于不是在同一个线程中，所以不能简单的使用ThreadLocal来存储。我们决定使用阿里的 `TTL`。
+>
+> ```java
+> public static TransmittableThreadLocal<Map> context = new TransmittableThreadLocal<>();
+> 
+> ScheduledExecutorService scheduler = TtlExecutors.getTtlScheduledExecutorService(new ScheduledThreadPoolExecutor(10, chainResultProcessFactory));
+> ```
+>
+> 使用`TTL`的`TransmittableThreadLocal`来代替ThreadLocal，使用的线程池需要使用`TtlExecutors.getTtlScheduledExecutorService`包裹。
 
 
 
