@@ -1082,6 +1082,61 @@ and saleable_inventory > 0
 
 很明显，超卖的影响更大，宁可确保少卖，绝不超卖。
 
+#### 秒杀场景二：基于Redis + MQ + 数据库实现高并发扣减
+
+之前的是秒杀方案一：基于阿里RDS 的 Hint机制，但是很多公司用不到阿里RDS，所以这个方案就是为了解决这个问题。
+
+为了抗住更高的并发，我们将数据库中的库存扣减放到Redis中，在Redis中进行扣减，但是，最终还是要数据库保证数据的一致性。
+
+因为在Redis中已经进行流量拦截了，真正走到数据库的流量会少很多。
+
+那么有什么方法可以在Redis扣减库存之后数据库也可以进行扣减，并且可以抗住剩余的并发的热点行更新，并且可以在数据库扣减失败的时候重试，那就是MQ了。
+
+![image-20260210002004117](images/NFTurbo/image-20260210002004117.png)
+
+##### 流程
+
+- 用户秒杀过来之后，先在Redis中进行扣减，利用Redis的单线程、高性能机制，可以保证在有库存的时候多个用户按照顺序扣减。如果库存没有了，就会失败。
+- 对于在Redis中扣减成功的数据，说明下单的时候还是存在库存的，那么就可以将这个用户的流量放过。这个时候发送MQ消息，告诉数据库，这个用户可以下单，执行订单相关逻辑。
+- Listener监听到消息之后执行数据库库存扣减。这个时候流量小了很多，并且可以做限流和降级，因为MQ可以重试，也可以控制速率。
+
+![image-20260210002402114](images/NFTurbo/image-20260210002402114.png)
+
+> 由于我们设计的是在Redis中进行库存扣减，数据库修改新增操作是在异步线程中的，所以我们需要Redis扣减之后直接返回给前端一个订单号，前段拿到这个订单号就可以生成支付码，但是有个问题就是：**如果数据库中的订单没有创建，前端生成了支付码，用户支付成功**，这其实是不符合逻辑的，所以我们还需要一个查询接口提供给前段，前段在拉起支付的时候需要先轮询查询这个订单，直到查询到这个订单之后才拉起支付。
+
+接口位置：`/trade/newBuy`。
+
+我们在接口中Redis扣减库存成功之后希望MQ一定发送成功，所以用RocketMQ发送事务消息。newBuy是一个事务消息，先发送半消息，执行本地事务，执行成功之后发送半消息commit。
+
+![image-20260210003124568](images/NFTurbo/image-20260210003124568.png)
+
+在本地事务中执行Redis的库存预扣减
+
+![image-20260210003240166](images/NFTurbo/image-20260210003240166.png)
+
+同时提供一个反查方法：`checkLocalTransaction`
+
+```java
+		@Override
+    public LocalTransactionState checkLocalTransaction(MessageExt messageExt) {
+        OrderCreateRequest orderCreateRequest = JSON.parseObject(JSON.parseObject(new String(messageExt.getBody())).getString("body"), OrderCreateRequest.class);
+        SingleResponse<String> response;
+        InventoryRequest inventoryRequest = new InventoryRequest(orderCreateRequest);
+        response = inventoryFacadeService.getInventoryDecreaseLog(inventoryRequest);
+        return response.getSuccess() && response.getData() != null ? LocalTransactionState.COMMIT_MESSAGE : LocalTransactionState.ROLLBACK_MESSAGE;
+    }
+```
+
+实现逻辑也很是简单，就是去Redis中查询是否存在扣减流水操作，如果存在的话，说明扣减成功了。如果没有说明没有扣减成功。
+
+消费端也很简单，就是进行数据库的一些操作：库存扣减、创建订单、新增流水操作。
+
+![image-20260210003632250](images/NFTurbo/image-20260210003632250.png)
+
+> 这个地方直接使用createAndConfirm方法即可完成订单创建和确认，为什么不分开呢？原因就是这个地方是异步线程，本身就是操作数据库的操作，订单先创建之后状态变成确认，完全可以一步完成。
+
+
+
 ## 功能模块
 
 ### 用户模块设计
