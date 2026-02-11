@@ -1135,6 +1135,51 @@ and saleable_inventory > 0
 
 > 这个地方直接使用createAndConfirm方法即可完成订单创建和确认，为什么不分开呢？原因就是这个地方是异步线程，本身就是操作数据库的操作，订单先创建之后状态变成确认，完全可以一步完成。
 
+#### 性能继续优化 - 添加本地缓存Caffeine
+
+此处的逻辑其实是过度设计的，项目中的量完全达不到这种程度。考虑到请求量如果十分大的情况下，我们添加本地缓存来提前做一层拦截，减少到Redis中的请求数量。
+
+我们设计的是一个Map结构的缓存存储结构：用的是Caffeine框架提供的缓存框架。
+
+```java
+private Cache<String, Boolean> soldOutGoodsLocalCache;
+
+    @PostConstruct
+    public void init() {
+        soldOutGoodsLocalCache = Caffeine.newBuilder()
+                .expireAfterWrite(1, TimeUnit.MINUTES)
+                .maximumSize(3000)
+                .build();
+    }
+```
+
+> 为什么要设计过期时间呢？原因很简单，就是因为可能在秒杀的场景下库存上一秒被抢购空了，这个Map中表示这个商品已经被售罄，但是商家在之后又重新添加了库存，这个时候如果用户继续下单会拦截，压根走不到扣减库存操作中。所以我们设置了一个1min时间的过期时间，1min删除刷新缓存一次。之后商家商家的商品就会重新被刷新出来。
+
+在商品扣减代码方法（**InventoryFacaeServiceImpl.decrease**）中。
+
+1. 首先查询这个本地缓存中的库存是否已经售罄，如果售完的话直接拦截掉
+2. 如果没有的话执行库存的扣减
+3. 通过 `isSoldOut` 方法判断是否库存已经卖完最后一个了。
+
+```java
+    private static boolean isSoldOut(InventoryResponse inventoryResponse) {
+        if(inventoryResponse.getSuccess() && inventoryResponse.getInventory() == 0){
+            //这部分代码没有实际功能作用，仅用于日志埋点，方便压测时判断延时，详见压测相关视频
+            log.warn("debug:soldOut ...");
+        }
+        return inventoryResponse.getSuccess() && inventoryResponse.getInventory() == 0
+                || !inventoryResponse.getSuccess() && inventoryResponse.getResponseCode().equals(ERROR_CODE_INVENTORY_IS_ZERO);
+    }
+```
+
+> 解释一下：如果正好是最后一个库存，Redis成功扣减，之后返回剩余的库存数量，如果是0，正合适，直接将本地缓存设置成true，下一次请求就不会被影响到，直接遇到本地缓存返回了；
+>
+> 如果缓存不存在，会走到redis，但是发现Redis中也不存在库存了，LUA脚本会报错：其中有很多错误：`INVENTORY_NOT_ENOUGH`、`INVENTORY_IS_ZERO`、`KEY_NOT_FOUND`、`OPERATION_ALREADY_EXECUTED`。如果遇到了库存是0的错误说明了Redis中没有库存了，返回也是将本地缓存设置成true。为什么不用`INVENTORY_NOT_ENOUGH`呢？这个其实是做了扩展思考，如果说之后支持一个用户下单多个，库存总计剩余10个，但是某一个用户下单了11个，会返回这个错误，但是不代表没有库存了，还有10个，之后下一个人来买5个的话还是可以下单成功的。但是现在的系统中是不支持多个购买的，所以并不存在所谓的库存不足还是库存为0，两种情况是一致的。
+
+
+
+
+
 
 
 ## 功能模块
