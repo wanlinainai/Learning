@@ -4490,3 +4490,80 @@ Seata中包含了三个组件：
 
 这也是我们选择Dubbo的一个原因。因为和Seata是天然支持的，可以利用这个实现AT模式的分布式事务。
 
+
+
+### 盲盒模块
+
+
+
+关于盲盒的部分主要的表结构如下：
+
+![image-20260224011355772](images/NFTurbo/image-20260224011355772.png)
+
+主要相关的是blind_box、blind_box_item、blind_box_inventory_stream表，以及其他和订单相关的trade_order和持有藏品held_collection表。
+
+// todo： 用户端操作
+
+
+
+
+
+
+
+#### 盲盒创建
+
+创建过程：
+
+![image-20260224011833818](images/NFTurbo/image-20260224011833818.png)
+
+> 在上链成功之后还需要在缓存中加上这个库存。方便后续销售。
+
+创建过程很简单，接口：`/admin/box/createBlindBox`。
+
+请求参数：
+
+```json
+{
+    "name": "游戏盲盒",
+    "detail": "游戏盲盒-其中包含各种大作",
+    "cover": "https://bkimg.cdn.bcebos.com/pic/ca1349540923dd54564ecf9cfd47a4de9c82d058e2bb",
+    "price": 10,
+    "quantity": 100,
+    "saleTime": "2026-02-24 00:00:00",
+    "collectionBoxParams": [
+        {
+            "collectionName": "最终幻想7重置版",
+            "collectionCover": "*****",
+            "collectionDetail": "最终幻想7重置版",
+            "rarity": "EPIC",
+            "quantity": 10
+        },
+                {
+            "collectionName": "艾尔登法环",
+            "collectionCover": "*****",
+            "collectionDetail": "艾尔登法环",
+            "rarity": "COMMON",
+            "quantity": 90
+        }
+    ]
+}
+```
+
+代码可以参考上述接口中的位置。主要介绍流程：
+
+后端拿到前端参数中的整体盲盒的参数和盲盒中藏品的参数之后分成了两步，一步是存储盲盒信息，一步是存储盲盒中藏品信息。
+
+通过`BlindBox.create(request);`来创建盲盒的参数，之后save保存，成功之后构造盲盒藏品的条目（藏品），由于我们的前端在传递参数的时候有盲盒的总数量和每一种藏品的数量，我们使用了一个简单的方法：`IntStream.range`来批量创建藏品，核心代码如下：
+
+```java
+//数量有多少个，就循环初始化多少个盲盒条目
+IntStream.range(0, quality.intValue()).forEach(i -> {
+	BlindBoxItem blindBoxItem = BlindBoxItem.create(boxItemCreateRequest, blindBox);
+  items.add(blindBoxItem);
+});
+```
+
+之后通过Mybatis-plus的`saveBatch`方法批量创建盲盒中藏品的信息存储到`blind_box_item`中。
+
+注意在批量创建的时候需要手动加`@Transactional`注解，因为我们是使用的`this.saveBatch()`。其中虽然包含了这个事务注解，但是实际上不会生效。注解通过代理对象，this指向的对象本身不是代理对象，所以不能生效。
+
