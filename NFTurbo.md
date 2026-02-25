@@ -4567,3 +4567,73 @@ IntStream.range(0, quality.intValue()).forEach(i -> {
 
 注意在批量创建的时候需要手动加`@Transactional`注解，因为我们是使用的`this.saveBatch()`。其中虽然包含了这个事务注解，但是实际上不会生效。注解通过代理对象，this指向的对象本身不是代理对象，所以不能生效。
 
+
+
+#### 客户端盲盒查询（不做过多介绍了，就是分页查询和查询详情功能）
+
+#### 客户端盲盒秒杀（基于MQ方案）
+
+![image-20260225210554215](images/NFTurbo/image-20260225210554215.png)
+
+在Controller中走的和藏品的秒杀同一个接口：`/trade/newBuy`。
+
+
+
+1. 执行校验：`orderValidatorChain.validate(orderCreateRequest);`。其中走到订单校验类`BaseOrderCreateValidator`中的话会发现执行校验方法是一个抽象方法。那么具体执行的是哪一个？实现的配置是在`OrderClientConfiguration`中。发现是一个执行链路，首先执行user的校验，其次执行的是商品的校验，最后的是预定校验。
+
+```java
+@Bean
+    public OrderCreateValidator orderValidatorChain(UserValidator userValidator, GoodsValidator goodsValidator, GoodsBookValidator goodsBookValidator) {
+        userValidator.setNext(goodsValidator);
+        goodsValidator.setNext(goodsBookValidator);
+        return userValidator;
+    }
+```
+
+最终执行的时候就会在这三个校验类中执行，用户校验的话必须是正常登录用户，不能是admin和艺术家；校验买家的状态是否是正常；校验买家的状态是否是实名认证状态。
+
+之后执行商品的校验：去数据库中查询到这个盲盒信息，必须是可售卖状态（状态包含：不可售卖、售卖中、售空、即将开售、等待开售）；判断购买的价格和数据库中的价格是否相等。
+
+之后预约的功能还没有。
+
+2. 使用MQ发送消息。我们使用的是Spring Cloud stream中的RocketMQ。我们在yaml文件中定义了一个同步链路中的事务消息。消息发送者也是一个Listener：`inventoryDecreaseTransactionListener`。这个类实现了MQ中的接口`TransactionListener`。有一个执行本地事务方法和重新回调检查本地执行方法。
+
+执行本地事务方法中需要进行库存的预扣减，也就是同步链路的扣减库存。进行Redis中的LUA脚本的处理，扣减库存、新增库存流水记录JSON格式，预扣减成功，将半消息commit，之后消费者就可以异步监听这个消息并进行消费。同时由于我们的数据库中没有创建订单，先返回给前端一个订单号，因为我们之后的异步订单生成也是利用的这个订单号。如果没有Commit或者ROLLBACK，会触发回查的机制，查看库存扣减流水是否存在，如果存在说明已经扣减过了，就可以重新发送COMMIT消息，否则就是rollback。
+
+3. 使用MQ消费消息。`NewBuyMsgListener`类中有一个Bean方法，`doNewBuyExecute`方法中进行createAndConfirm进行订单的创建流程。坚守的依旧是：`一锁二判三更新`流程。之后就是进行流水校验、新增盲盒表库存流水记录（数据库中）、扣减数据库中的库存值（乐观锁机制）、之后创建订单Order、创建订单流水记录。
+4. 之后前端拿着同步流程中的订单号进行轮询查询，创建订单之后会查询到TradeOrder订单信息。之后便可以拉起支付。
+
+#### 客户端盲盒秒杀（基于阿里云 RDS Hint机制）
+
+这个过程可以参考：[库存相关（秒杀）](#库存相关（秒杀）)。其实就是通过Redis先做一层拦截，减少流量之后全称同步（压测之后再Spring Event事件中选择的同步）。
+
+#### 盲盒支付成功
+
+盲盒支付部分和藏品的流程几乎一模一样，唯独有两个区别：1、盲盒功能在支付成功之后需要分配盲盒Item；2、盲盒支付成功之后不需要自动上链，只有藏品才可以直接上链。
+
+1. assign分配。我们的盲盒中的内容其实是在购买盲盒的时候就确定了。我们的分配规则部分是设置的默认的RANDOM随机，还可以通过设置优先级（比如活跃用户的分配更贵等等）。根据ruleName获取到规则的实现类，就按照随机功能为例，核心就是在SQL中使用`order by RAND() limit 1`来表示。获取到一个随机的BoxItemId之后便可以更新Item的状态为已分配。
+
+```java
+    @Override
+    @DistributeLock(keyExpression = "#request.blindBoxId", scene = "BLIND_BOX_ASSIGN")
+    public Boolean assign(BlindBoxAssignRequest request) {
+        BlindBox blindBox = this.getById(request.getBlindBoxId());
+        //调用分配的规则进行分配
+        BlindAllotBoxRule ruleName = blindBox.getAllocateRule();
+        BlindBoxBindMatchRequest matchRequest = new BlindBoxBindMatchRequest();
+        matchRequest.setBlindBoxId(request.getBlindBoxId());
+        Long blindBoxItemId = blindBoxRuleServiceFactory.get(ruleName).match(matchRequest);
+        Assert.notNull(blindBoxItemId, () -> new BlindBoxException(BLIND_BOX_ITEM_ALLOCATE_FAILED));
+
+        //更新blindBoxItem状态
+        BlindBoxItem blindBoxItem = new BlindBoxItem();
+        blindBoxItem.setId(blindBoxItemId);
+        blindBoxItem.assign(request);
+        boolean updateResult = blindBoxItemService.updateById(blindBoxItem);
+        Assert.isTrue(updateResult, () -> new BlindBoxException(BLIND_BOX_UPDATE_FAILED));
+        return true;
+    }
+```
+
+2. 只有藏品才可以在支付成功之后直接上链，因为藏品是确定的，盲盒其中的Item在用户未打开的时候是不确定的，不能直接上链。实现支付成功自动上链的操作是通过Seata进行处理的。通过注册钩子函数，在seata事务COMMIT之后执行上链操作。如果上链过程出现错误，还可以通过定时任务进行重试。参考[上链（chain）](#上链（chain）)中的定时任务。
+
