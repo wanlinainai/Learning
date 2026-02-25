@@ -4637,3 +4637,35 @@ IntStream.range(0, quality.intValue()).forEach(i -> {
 
 2. 只有藏品才可以在支付成功之后直接上链，因为藏品是确定的，盲盒其中的Item在用户未打开的时候是不确定的，不能直接上链。实现支付成功自动上链的操作是通过Seata进行处理的。通过注册钩子函数，在seata事务COMMIT之后执行上链操作。如果上链过程出现错误，还可以通过定时任务进行重试。参考[上链（chain）](#上链（chain）)中的定时任务。
 
+> seata的`TransactionHookManager.registerHook`钩子函数讲解：
+>
+> 基本语法如下：
+>
+> ```java
+> TransactionHookManager.registerHook(new TransactionHook() {
+>     @Override
+>     public void beforeCommit() {
+>         // 事务提交前执行
+>     }
+>     
+>     @Override
+>     public void afterCommit() {
+>         // 事务提交后执行
+>     }
+>     
+>     @Override
+>     public void beforeRollback() {
+>         // 事务回滚前执行
+>     }
+>     
+>     @Override
+>     public void afterRollback() {
+>         // 事务回滚后执行
+>     }
+>     
+>     // 其他生命周期方法...
+> });
+> ```
+>
+> 我们将TransactionHook封装到了`PaySuccessTransactionHook`中。主要包含的方法就是上述代码中的方法，事务提交前、事务提交后、事务回滚前、事务回滚后。
+
