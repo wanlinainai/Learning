@@ -4669,3 +4669,34 @@ IntStream.range(0, quality.intValue()).forEach(i -> {
 >
 > 我们将TransactionHook封装到了`PaySuccessTransactionHook`中。主要包含的方法就是上述代码中的方法，事务提交前、事务提交后、事务回滚前、事务回滚后。
 
+#### 盲盒列表和打开盲盒
+
+盲盒列表接口：`/box/heldBoxList`。盲盒列表部分很简单，就是利用mybatis-Plus进行Page分页查询，得到的结果如图所示：
+
+![image-20260227224425841](images/NFTurbo/image-20260227224425841.png)
+
+由于每一个盲盒中只有一个藏品，所以在盲盒购买成功之后就会拿到这个itemId用来表示藏品的ID。
+
+打开盲盒接口：`/box/openBlindBox`。
+
+流程是：
+
+1. 做相关校验（itemId、userId）等藏品和用户的相关校验。
+2. 之后设置盲盒条目的状态为：opening，更新数据库（我们的条目的状态总共有：未处理、已分配、打开中、打开成功）。为什么会存在这么一个opening呢？难道直接就是成功不行吗？原因是：我们的item是需要上链的，如果不加这个的话，流程就是需要先执行上链操作，成功之后用户拿到对应的藏品。但是问题就是可能出现在我们的上链过程中，如果上链失败了，用户拿到这个藏品但是链上没有数据了。我们设计的是通过异步上链，如果上链失败的话可以通过定时任务进行补偿操作，那么这个opening状态就可以作为定时任务扫表的状态依据。
+3. 通过Spring Event 解耦做异步操作
+
+- 通过@Async异步操作整个onApplicationEvent方法。其中的@Async中使用到的线程池是通过Bean的方式创建的。
+
+```java
+ExecutorService executorService = new ThreadPoolExecutor(10, 20,
+                0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(1024), namedThreadFactory, new ThreadPoolExecutor.AbortPolicy());
+```
+
+> 线程池核心参数和相关执行流程：
+>
+> 核心线程数、最大线程数、非核心线程存活时间、时间单位、任务队列、线程工厂、拒绝策略
+
+- 创建持有明细和持有明细的流水。
+- 之后执行上链，更新状态为SUCCEED。如果上链失败的话我们也是存在定时任务进行单独处理的。扫描opening状态的记录进行更新上链处理更新状态。
+
