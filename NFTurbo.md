@@ -4826,3 +4826,16 @@ public class TccConfiguration {
 - confirTransaction方法中如果不存在记录的话说明出问题了报错；如果取消状态是TRY，将状态变成Confirm；如果已经存在了Confirm的记幂等掉。
 - cancelTransaction方法中，首先解决空回滚和悬挂问题，如果库中不存在记录，说明是空回滚了，将状态设置为EMPTY_CANCEL空回滚，同时设置行为状态是Cancel，避免悬挂；如果原本是TRY状态，设置成：`CANCEL_AFTER_TRY_SUCCESS`吗，如果是Confirm状态，设置成：`CANCEL_AFTER_CONFIRM_SUCCESS`。
 
+##### 业务执行流程
+
+我们的TCC所用在的接口是：`/normalBuy`接口。
+
+在接口的**TradeApplicationService**中，执行的流程是：TRY ---> Try失败的话发送废单消息，异步进行补偿 ---->  Confirm  ---> Confirm失败的话发送疑似废单消息延迟检查 ---> 如果都成功的话返回orderId即可。
+
+- 在TRY过程中，
+  - 首先进行商品库存的扣减，最主要的内容就是冻结库存，我们商品表中存在一个字段是冻结数量字段，update这个商品的记录冻结库存，这个字段 + 1。在`tryDecreaseInventory`方法中首先进行Try transaction_log表的操作，之后新增Collection_inventory_stream表的库存流水记录，之后设置冻结操作。
+  - 之后Try 订单操作和订单流水记录，新增订单和订单流水。订单中的主要信息就是订单的状态是CREATE状态。
+- 在Try失败的情况中，我们是通过RocketMQ进行发送消息异步消费，在Try失败的情况下，首先先执行TCC 的cancelTransaction，之后将冻结库存进行回滚，重新加回去。之后将订单的状态变成discard。
+- 如果Try成功，Confirm中成功，首先会执行的是 TCC 的Confirm，之后执行商品的可售库存的扣减和解冻冻结的库存（冻结字段 - 1）。之后进行订单的CONFIRM操作，首先是订单的 TCC 的Confirm，之后更新订单状态是Confirm，新增订单流水记录。
+- 如果CONFIRM失败了，相较于Try的失败多了一件事就是单独处理库存的可售库存的回退和冻结库存 + 1。
+
