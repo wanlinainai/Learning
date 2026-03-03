@@ -2333,6 +2333,51 @@ if redis.call('hexists', KEYS[2], ARGV[2]) == 1 then
 > - 在多个应用或服务需要共同访问同一个资源使用，微服务架构中保护共享资源。
 > - 适用于处理多个节点的业务流程，保证数据的一致性和系统的稳定性。
 
+#### 藏品销毁和转让
+
+##### 藏品销毁
+
+接口：`/collection/destroy`，流程如下：
+
+- heldCollection进行藏品的状态修改为：**DESTROYING**，heldCollection中存在5种状态（INIT「初始化」、ACTIVED「生效」、INACTIVED「失效」、DESTROYING「销毁中」、DESTROYED「已销毁」）。
+- 添加 heldCollectionStream 流程记录。
+- 之后 在chain模块 进行持有藏品的 销毁
+  - 记录链的操作信息
+  - 使用延时线程池处理发送 MQ 消息到上游处理
+  - 在 destroy 分支中进行处理持有藏品销毁的流程，状态修改成：`DESTROYED`
+
+##### 藏品转让
+
+转让功能指的是用户将自己购买的藏品转让给其他人，转让藏品的收藏权。
+
+为了让藏品转让记录有迹可循，我们采用的是：**将老的持有藏品的状态设置成INACTIVE，同时创建上链持有藏品，状态之后推进到ACTIVE**。
+
+整体的流程如下：
+
+![image-20260303231040031](images/NFTurbo/image-20260303231040031.png)
+
+在 heldCollection 中进行转让的操作流程如下：
+
+- 老持有藏品的藏品的状态变成 INACTIVE
+- 保存持有藏品流水表，记录操作，主要记录的就是stream_type是：`TRANSFER_OUT`表示是转让人
+- 保存新的持有藏品记录
+- 保存持有藏品流水表，记录操作，主要记录的就是stream_type是：`TRANSFER_IN`表示是被转让人
+
+此时的新的持有藏品状态不能变成ACTIVE，因为最终是以链上状态保证的。
+
+上链转让操作流程如下：
+
+- 在链的发送请求之前，首先做限流操作；之后做幂等操作，查看链操作记录是否存在；没有的话新增链操作记录；
+- 通过`ScheduledThreadPoolExecutor`线程池执行定时操作
+- 查询到结果成功之后发送 MQ 消息
+- 接收端会走：`COLLECTION_TRANSFER`分支，通过持有藏品ID更新新的藏品状态从**INIT**为 **ACTIVE**
+
+
+
+
+
+
+
 ### Chain模块
 
 #### Mock服务（Mock掉链服务）
@@ -4839,3 +4884,6 @@ public class TccConfiguration {
 - 如果Try成功，Confirm中成功，首先会执行的是 TCC 的Confirm，之后执行商品的可售库存的扣减和解冻冻结的库存（冻结字段 - 1）。之后进行订单的CONFIRM操作，首先是订单的 TCC 的Confirm，之后更新订单状态是Confirm，新增订单流水记录。
 - 如果CONFIRM失败了，相较于Try的失败多了一件事就是单独处理库存的可售库存的回退和冻结库存 + 1。
 
+> TCC 脏读的问题：
+>
+> 
