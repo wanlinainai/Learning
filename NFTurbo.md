@@ -4765,11 +4765,38 @@ ExecutorService executorService = new ThreadPoolExecutor(10, 20,
 
 我们做的一个亮点设计是什么？就是通过bitSet将所有用户设置到Redis中，之后可以通过某一个商品的预订人数来判断该商品是不是热点商品，我们暂时设置的阈值是 2000 。
 
+接口位置：`/trade/book`
+
 流程：
 
 - 设置所有用户到Redis的bitSet中，将预购的用户的id所在的内容设置为 1
 - 校验是否已经存在过预定，如果存在过返回已经预定（防小人恶意刷接口）
 - 保存预定商品到数据库
+- 开虚拟线程为热品商品添加缓存，失败了不影响主要业务
+  - 构造一个热点商品的热点Key，添加到本地缓存中
+  - 获取Redis中的Set集合，之后将这个热点的Key放入到这个Set集合中用来表示热点商品
+
+
+> 基于 bitSet 实现高效的商品预约
+>
+> 同一个商品，我们想要记录那一些用户预约过，同时需要能够快速查询，并且尽可能的减少存储空间，避免浪费，我们选择了使用 bitSet。
+>
+> 为了快速的读取，我们借助了 Redis 的bitSet 数据结构，同时为了避免Redis挂机了，我们需要对预约做持久化存储。
+>
+> BitSet 是一种特殊的String类型的接口，允许针对每一个位置进行操作，每一个为可以为0 或者 1，我们设计的是预约的用户存储的位置就是1，否则就是0。
+>
+> - 节省内存：每一个位只占用了一位(bit)，显著减少了内存的占用。
+> - 搞笑的操作：Redis 提供了丰富的命令来操作 BitGet ，比如：SETBIT  GETBIT  BITCOUNT。
+> - 原子性操作：基于Redis的吗，所以是单线程原子性的。
+>
+> 因为我们的用户ID是唯一的，可以将这个用户ID映射到唯一的bit 上面，预约过得设置成1 ，没有预约过的设置为0.
+>
+> ```java
+> RBitSet bookedUsers = redissionClient.getBitSet(BOOK_KEY + goodsType + CacheConstant.CACHE_KEY_SEPARATOR + goodsId);
+> return bookedUser.get(Integer.parseInt(buyerId));
+> ```
+>
+> 在操作这个Redis的 bitSet 的时候不需要单独的进行初始化，查不到的话会自动初始化，否则就能查询到的。
 
 
 
