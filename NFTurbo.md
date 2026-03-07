@@ -4942,3 +4942,61 @@ public class TccConfiguration {
 - 在Try失败的情况中，我们是通过RocketMQ进行发送消息异步消费，在Try失败的情况下，首先先执行TCC 的cancelTransaction，之后将冻结库存进行回滚，重新加回去。之后将订单的状态变成discard。
 - 如果Try成功，Confirm中成功，首先会执行的是 TCC 的Confirm，之后执行商品的可售库存的扣减和解冻冻结的库存（冻结字段 - 1）。之后进行订单的CONFIRM操作，首先是订单的 TCC 的Confirm，之后更新订单状态是Confirm，新增订单流水记录。
 - 如果CONFIRM失败了，相较于Try的失败多了一件事就是单独处理库存的可售库存的回退和冻结库存 + 1。
+
+
+
+## 压测
+
+首先就是一些监控软件：`Prometheus`、`Grafana`。
+
+我们使用Spring Boot 版本是3.2.2。Spring Boot 3 之后默认支持：Micrometer。用于暴露`Prometheus`监控指标。
+
+依赖引入：
+
+```xml
+        <!--  prometheus -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!--  dubbo 监控:https://cn.dubbo.apache.org/zh-cn/overview/tasks/observability/metrics-start/ -->
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-spring-boot-observability-starter</artifactId>
+            <version>3.2.10</version>
+        </dependency>
+```
+
+`spring-boot-starter-actuator`是Spring Boot 提供的一个核心依赖模块，用于简化性能的监测和管理。主要提供了一系列的断点：
+
+- `/actuator/health`
+- `/actuator/info`
+- `/actuator/metrics`
+
+集成自Micrometer提供的 指标，能够通过:`/actuator/metrics`查看应用性能数据。
+
+`micrometer-registry-prometheus`是Micrometer提供的一个Prometheus集成库，
+
+- 在Spring Boot中会自动注册一个`/actuator/prometheus`端点。
+
+之后启动应用访问：`IP:8085/actuator/prometheus`，看到metrics信息说明接入成功
+
+之后在prometheus 配置机器中的`prometheus.yml`。
+
+```yml
+  - job_name: "nft_turbo"
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['localhost:8085']
+```
+
+之后重启服务：`systemctl restart prometheus`
+
+### aliyun PTS 压测（不推荐使用，太贵了，一次就需要15元）
+
