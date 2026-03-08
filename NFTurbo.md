@@ -5120,3 +5120,83 @@ public class NewBuyBatchMsgListener implements RocketMQListener<List<Object>>, R
 
 我们采用了32的批量拉取的时候，这个测试机器的CPU已经存在了飚高的问题了，总消费时间大概是10min，前几分钟几乎达到了100%，5min之后CPU占用率达到了73%左右。刚开始的CPU高的原因是请求和MQ在一同进行处理，CPU占用自然而然就高，之后请求结束了只剩下了MQ的多线程消费的话就会下降一部分，但是MQ的整体占用CPU是在70%左右是可以理解的，不要一直超过80%。
 
+还有一个就是因为我们在压测的时候此处是没有考虑秒杀商品的库存量的，一般来说秒杀商品不会出现几千份，上万基本不可能，所以实际上在真实的业务场景中收到库存限制的情况影响的话MQ的延迟并不会出现太长的时间。
+
+所以说在不考虑库存的情况下2C8G的机器最大只能是100QPS左右了。
+
+<span style="color: red;">其中存在CPU占用率很高和MySQL库存扣减时间很长的问题，下面会进行排查和解决</span>
+
+#### 5000库存处理
+
+我们切换到测试机器为**4C8G**的机器，在进行压测的过程中，通过`top`实时查看CPU占用率发现Java进程 CPU 干到接近300%，之后查看MySQL的瓶颈，其实发现MySQL并没有达到瓶颈，CPU只有占用不到10%，内存使用率也很低，确定基本的性能问题与MySQL没有关系。
+
+同时我们通过MySQL 和 Redis 的库存对比的话发现差不多存爱 10S 左右的延迟消费。
+
+单个商品 5000 库存量，采用MQ + Redis + MySQL 的方案进行扣减，QPS 在 100进行压测。
+
+通过安装`Arthas`监控，使用`thread -n 3`查看3个最大的线程占用情况：
+
+- 第一个就是logback的时候占用率达到了接近50%左右，找到我们的logback日志配置文件：
+
+```xml
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>512</queueSize>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="APPLICATION"/>
+    </appender>
+```
+
+- 第二个是MySQL的连接部分出现了占用较高的问题，不是MySQL本身的问题，是DruidDataSource连接的时候出现的
+
+针对于上述的两种处理方式的话解决方案如下：
+
+1. 日志：首先要了解一下其中的相关的logback的配置：
+
+   | 属性                | 默认值 | 说明                                                         |
+   | ------------------- | ------ | ------------------------------------------------------------ |
+   | queueSize           | 256    | 队列容量（日志事件数）。队列满了根据策略处理新的事物         |
+   | discardingThreshold | 20     | 队列剩余的容量阈值（百分比），低于阈值时丢弃`INFO`以下级别的日志（TRACE、DEBUG） |
+   | neverBlock          | false  | 队列满了：<br />true = 直接丢弃新的事件<br />false = 阻塞等待队列空间 |
+   | includeCallerData   | false  | true = 异步获取调用者信息，消耗性能，需要的时候才能启用      |
+   | maxFlushTime        | 1000   | 关闭的时候等待队列处理完成的超时时间（ms），超时之后丢弃剩余事件 |
+
+   通过上述的配置项我们可以了解到：
+
+   `queueSize`太小了，队列小的话就很容易满，满了就会阻塞
+
+   `discardingThreshold`配置是0，是0的时候所有的日志都会进入队列，并且不会因为队列剩余容量触发自动丢弃
+
+   没有配置`neverBlock`，false是默认值，表示的是队列满的话会进行阻塞，影响性能
+
+   有了方案之后我们修改文件如下：
+
+   ```xml
+       <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+           <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+               <layout class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.TraceIdPatternLogbackLayout">
+                   <Pattern>${FILE_LOG_PATTERN}</Pattern>
+               </layout>
+           </encoder>
+       </appender>
+   ```
+
+   当然，除了这个日志的话有一些其他的日志也可以顺便处理一下，sharding-jdbc有关SQL会被打印出来，修改配置将这个配置项关闭，不在打印这些无用的SQL日志。
+
+2. 针对于数据库连接部分的处理：主要原因其实是数据库配置的链接数量太少了，以及我们之前的关于druidDataSource的配置有点问题，修改为：
+
+   ```yaml
+   datasource:
+   	initial-size: 100 # 连接池初始化时创建的连接数。默认值为0。
+     min-idle: 100 # 连接池中保持的最小空闲连接数量。当连接池中的连接数量小于这个值时，连接池会尝试创建新的连接。默认值为0。
+     max-active: 200 # 连接池中允许的最大连接数。如果所有连接都被使用并且没有空闲连接，新的连接请求将被阻塞，直到有连接可用。默认值为8。
+     max-wait: 60000 # 获取连接时的最大等待时间，单位为毫秒。如果在指定的时间内无法获取到连接，将抛出异常。默认值为-1，表示无限等待。
+           
+   ```
+
+   这个具体的配置也是按照MySQL的压测指数进行处理的，观察MySQL机器上的CPU压力、慢SQL、update锁行的情况进行相应的设置
+
+之后经过上述调整之后重新进行压测处理，发现 5000 库存的商品在100QPS的情况下是可以轻松应对的，**同时Redis中的库存和MySQL的库存之间的同步时间也是减少到了2、3 S 时间**，效果还是很不错的，性能提升了7、80以上。
+
+
+
