@@ -5172,12 +5172,12 @@ public class NewBuyBatchMsgListener implements RocketMQListener<List<Object>>, R
    有了方案之后我们修改文件如下：
 
    ```xml
-       <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-           <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
-               <layout class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.TraceIdPatternLogbackLayout">
-                   <Pattern>${FILE_LOG_PATTERN}</Pattern>
-               </layout>
-           </encoder>
+   <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+           <discardingThreshold>20</discardingThreshold>
+           <queueSize>2048</queueSize>
+           <neverBlock>true</neverBlock>
+           <includeCallerData>false</includeCallerData>
+           <appender-ref ref="APPLICATION"/>
        </appender>
    ```
 
