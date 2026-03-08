@@ -5000,3 +5000,123 @@ public class TccConfiguration {
 
 ### aliyun PTS 压测（不推荐使用，太贵了，一次就需要15元）
 
+#### rocketMQ  +  Redis 压测 100QPS
+
+首先介绍一下机器的配置：测试机器（2核8GB内存），MySQL设置了分表，但是没有分库（一个机器）。
+
+**10 QPS**的情况很简单了，没有任何问题。主要就是库存的比较。
+
+**100QPS**的情况出现了一点问题。我们的RocketMQ在消费的时候是单条消息进行拉取处理。在消息的进行库存预扣减的时候完全没有问题，但是出现了MQ消息堆积的问题，总计是30000个库存，差不多有25000库存出现消息积压。总计消费时间是在20min。
+
+在**100 QPS **情况下，我们可以尝试批量拉取消息进行处理，当时进行了大量的调研，Spring Cloud Stream RocketMQ不支持批量消费，但是原生的RocketMQ是支持批量消费的。我们使用的是Spring 3.2.2版本，添加了RocketMQ之后又出现了版本不统一的问题。接下来又是处理版本问题。之后就诞生了一个批量处理消息的监听器：`NewBuyBatchMsgListener`。
+
+```java
+@Component
+@Slf4j
+@RocketMQMessageListener(topic = "new-buy-topic", consumerGroup = "trade-group")
+@ConditionalOnProperty(value = "rocketmq.broker.check", havingValue = "true")
+public class NewBuyBatchMsgListener implements RocketMQListener<List<Object>>, RocketMQPushConsumerLifecycleListener {
+
+    @Autowired
+    private OrderFacadeService orderFacadeService;
+
+    @Autowired
+    private OrderReadService orderReadService;
+
+    @Autowired
+    private InventoryFacadeService inventoryFacadeService;
+
+    @Autowired
+    private ThreadPoolExecutor newBuyConsumePool;
+
+    @Override
+    public void onMessage(List<Object> strings) {
+        log.info("NewBuyBatchMsgListener receive message: {}", strings);
+    }
+
+    @Override
+    public void prepareStart(DefaultMQPushConsumer consumer) {
+        consumer.setPullInterval(500);
+        consumer.setConsumeMessageBatchMaxSize(64);
+        consumer.setPullBatchSize(64);
+        consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -> {
+            log.warn("NewBuyBatchMsgListener receive message size: {}", msgs.size());
+
+            CompletionService<Boolean> completionService = new ExecutorCompletionService<>(newBuyConsumePool);
+            List<Future<Boolean>> futures = new ArrayList<>();
+
+            // 1. 提交所有任务
+            msgs.forEach(messageExt -> {
+                Callable<Boolean> task = () -> {
+                    try {
+                        OrderCreateRequest orderCreateRequest = JSON.parseObject(JSON.parseObject(messageExt.getBody()).getString("body"), OrderCreateRequest.class);
+                        return doNewBuyExecute(orderCreateRequest);
+                    } catch (Exception e) {
+                        log.error("Task failed", e);
+                        return false; // 标记失败
+                    }
+                };
+                futures.add(completionService.submit(task));
+            });
+
+            // 2. 检查结果
+            boolean allSuccess = true;
+            try {
+                for (int i = 0; i < msgs.size(); i++) {
+                    Future<Boolean> future = completionService.take();
+                    if (!future.get()) { // 3.发现一个失败立即终止
+                        allSuccess = false;
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                allSuccess = false;
+            }
+
+            // 3. 根据结果返回消费状态
+            return allSuccess ? ConsumeConcurrentlyStatus.CONSUME_SUCCESS
+                    : ConsumeConcurrentlyStatus.RECONSUME_LATER;
+        });
+    }
+
+    public boolean doNewBuyExecute(OrderCreateRequest orderCreateRequest) {
+        OrderCreateAndConfirmRequest orderCreateAndConfirmRequest = new OrderCreateAndConfirmRequest();
+        BeanUtils.copyProperties(orderCreateRequest, orderCreateAndConfirmRequest);
+        orderCreateAndConfirmRequest.setOperator(UserType.PLATFORM.name());
+        orderCreateAndConfirmRequest.setOperatorType(UserType.PLATFORM);
+        orderCreateAndConfirmRequest.setOperateTime(new Date());
+        orderCreateAndConfirmRequest.setSyncDecreaseInventory(true);
+
+        OrderResponse orderResponse = orderFacadeService.createAndConfirm(orderCreateAndConfirmRequest);
+        //订单因为校验前置校验不通过而下单失败，回滚库存
+        if (!orderResponse.getSuccess() && ORDER_CREATE_VALID_FAILED.getCode().equals(orderResponse.getResponseCode())) {
+            String orderId = orderResponse.getOrderId();
+            TradeOrder tradeOrder = orderReadService.getOrder(orderId);
+            //再重新查一次，避免出现并发情况
+            if (tradeOrder == null) {
+                InventoryRequest collectionInventoryRequest = new InventoryRequest();
+                collectionInventoryRequest.setGoodsId(orderCreateRequest.getGoodsId());
+                collectionInventoryRequest.setInventory(orderCreateRequest.getItemCount());
+                collectionInventoryRequest.setIdentifier(orderCreateRequest.getOrderId());
+                collectionInventoryRequest.setGoodsType(orderCreateRequest.getGoodsType());
+                SingleResponse<Boolean> decreaseResponse = inventoryFacadeService.increase(collectionInventoryRequest);
+                if (decreaseResponse.getSuccess()) {
+                    log.info("increase success,collectionInventoryRequest:{}", collectionInventoryRequest);
+                    //库存回滚后提前返回
+                    return true;
+                } else {
+                    log.error("increase inventory failed,orderCreateRequest:{} , decreaseResponse : {}", JSON.toJSONString(orderCreateRequest), JSON.toJSONString(decreaseResponse));
+                    throw new OrderException(OrderErrorCode.INVENTORY_INCREASE_FAILED);
+                }
+            }
+        }
+        Assert.isTrue(orderResponse.getSuccess(), "create order failed ," + orderResponse.getResponseMessage());
+        return true;
+    }
+}
+```
+
+> 主要就是实现接口：`RocketMQPushConsumerLifecycleListener`，重写`prepareStart`方法。设置`consumeMessageBatchMaxSize`和`pullBatchSize`属性，之后我们使用JUC中的`Future`接口实现任务的处理，通过线程池批量处理，全部成功提交：`ConsumeConcurrentlyStatus.CONSUME_SUCCESS`，只要存在一个失败的情况下就是：`ConsumeConcurrentlyStatus.RECONSUME_LATER`。
+
+我们采用了32的批量拉取的时候，这个测试机器的CPU已经存在了飚高的问题了，总消费时间大概是10min，前几分钟几乎达到了100%，5min之后CPU占用率达到了73%左右。刚开始的CPU高的原因是请求和MQ在一同进行处理，CPU占用自然而然就高，之后请求结束了只剩下了MQ的多线程消费的话就会下降一部分，但是MQ的整体占用CPU是在70%左右是可以理解的，不要一直超过80%。
+
