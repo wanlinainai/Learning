@@ -5198,5 +5198,106 @@ public class NewBuyBatchMsgListener implements RocketMQListener<List<Object>>, R
 
 之后经过上述调整之后重新进行压测处理，发现 5000 库存的商品在100QPS的情况下是可以轻松应对的，**同时Redis中的库存和MySQL的库存之间的同步时间也是减少到了2、3 S 时间**，效果还是很不错的，性能提升了7、80以上。
 
+### Jmeter 的使用
 
+#### 200 QPS
+
+出现CPU飚高的问题。
+
+首先我们还是使用Arthas进行检测，发现日志的占用还是比较高。
+
+之后我们做了日志降级，将INFO级别的日志降级成WARN，调整了日志阻塞的队列为2048。之后通过服务器的日志打印的时候观察ERROR非常多，这个其实是业务处理的问题，本身是库存已经售空了，但是代码是直接throw Exception了，导致了ERROR类型的日志大量打印，我们处理了相关的售罄相关的代码，不打印了ERROR日志（原因是越往后越慢）。
+
+之后查看数据库的监控，发现CPU占用20多，内存也没问题，也不存在慢SQL。
+
+之后我们想到难道是MQ？**在之后查看MQ的中出现了大量的Exception，原因难道是MQ扛不住吗？但是MQ本身抗万级QPS的，怎么可能200QPS就出现问题了？**
+
+调整拉取队列的数量，在打印日志的时候观察拉取的数量其实也不存在问题，拉取数量有的是30多，有的是20多，绝大多数拉取的数量都是1。其实发现也没有什么问题。
+
+我们重新验证100QPS，发现Redis中的 库存和MySQL中的库存的减少时间还是很少。只有2S左右。也就是订单真正产生和预扣减的时差在2S左右，其实是没有什么问题的，MQ也没有报错。
+
+**在之后想到难道是网络的原因？**
+
+我们通过promethues查看网络连接，其中有一个TCP ERROR，明显在压测的时候出现了问题，异常指标（RetransSegs）明显变高。网络重传变高。
+
+> TCP重传率是一个用来衡量TCP网络性能的重要指标，指的是在TCP通信的过程中，由于数据包丢失、损坏或者确认未达到预期导致的包重传的比例。
+>
+> 如果出现重传率比较高的情况一般是网络连接出现了问题，比如阻塞、链路不稳定或质量差，导致了网络吞吐量的下降。
+
+之后去服务器上查看网络相关的指标，明显发现网络的带宽是做了限制，带宽已经达到100%，之后调整了网络带宽之后轻轻松松将机器的阈值达到了 200 QPS。
+
+#### 300 QPS 
+
+在进行300 QPS 的压测的时候我们发现了一个有趣的现象。在使用aliyun的PTS压测服务和APIFox压力测试以及Jmeter的工具中，发现使用Jmeter压测的时候Redis库存在最开始消耗的非常快，几秒钟就已经消耗完了，查看Redis的监控，发现Redis的峰值QPS 能达到2500。但是使用其他两个的时候便不会出现这种问题。原因是啥呢?其实是Jmeter的压测模型和其他两个不太一样，Jmeter中的还有一个常数吞吐量定时器这么一个工具，这个工具其实就是为了避免瞬时流量太大导致的QPS不准的问题的。
+
+![image-20260310214226786](images/NFTurbo/image-20260310214226786.png)
+
+根据如上配置即可。
+
+进行300 QPS的压测，发现MQ消息还是会出现消息堆积的问题，时长大概是30S，我们首先考虑通过MQ异步消费的时候线程池修改线程池配置。
+可以发现我们在代码中的`ThreadPoolExecutor`是通过@Autowired进行注入的，我们是通过配置的方式将线程池放入到IOC中，之后我们在压测的过程中可以通过接口的方式进行修改线程池大小，动态修改配置观察压测情况。
+
+**NewBuyBatchMsgListener**
+
+```java
+    @Autowired
+    private ThreadPoolExecutor newBuyConsumePool;
+```
+
+**ThreadPoolConfiguration**
+
+```java
+@Configuration
+public class ThreadPoolConfiguration {
+
+    @Bean
+    public ThreadPoolExecutor newBuyConsumePool(MeterRegistry registry) {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                16,
+                32,
+                60, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>());
+
+        ExecutorServiceMetrics.monitor(registry, executor, "newBuyConsumePool");
+        return executor;
+    }
+
+    @Bean
+    public ThreadPoolExecutor newBuyPlusConsumePool(MeterRegistry registry) {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                16,
+                32,
+                60, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>());
+
+        ExecutorServiceMetrics.monitor(registry, executor, "newBuyPlusConsumePool");
+        return executor;
+    }
+}
+```
+
+动态调整线程池方法：
+
+```java
+    @GetMapping("/setPool")
+    public Result<String> setPool(int core, int max) {
+        //todo 查询用户，判断是管理员才可以执行。
+        orderFacadeService.setPool(core, max);
+        return Result.success("true");
+    }
+```
+
+我们将16线程增大到32，时间消耗达到30S。
+
+我们着手将MQ的批量拉取数量从32调整到64，需要注意调整的话需要在Broker.conf中设置：
+
+```shell
+maxTransferCountOnMessageInMemory = 64
+```
+
+时间消耗达到17S。
+
+将32线程增大到64，时间消耗达到17S。
+
+如此一来我们感觉瓶颈应该不是在线程数上了，我们着手数据库的连接数。将连接数从原本的50调整到100，结果时间为16S。可能问题都不在这些地方。
 
