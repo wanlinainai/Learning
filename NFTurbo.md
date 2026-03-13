@@ -5379,3 +5379,105 @@ maxTransferCountOnMessageInMemory = 64
 - Pay模块：同inventory模块。
 - 其他模块不设置限流。
 
+## 业务对账
+
+一般来说，对账分成两种：**离线对账**和**准实时对账**。
+
+- 准实时对账指的是基本是实时对账，发生数据和对账基本上只有秒级的延迟。并非是完全实时。
+- 离线对账一般都是 D + 1 
+  - D+1：D指的是Day，天数 + 1，具体的场景其实是今天发生了数据的产生，明天才会进行业务对账。
+  - T+1：T指的是工作日，今天数据产生了，对账发生在下一个工作日中，可能并非是明天，毕竟双休嘛（997除外）。
+
+对账的技术上其实一般只有两种，要么是代码对账，要么是SQL对账。
+
+写代码这种方式一般来说都是通过定时任务实现的，通过运行定时任务，之后去扫表，或者去远程拉取数据，在业务代码中进行核对。这种方式的话好处是比较通用，不管是数据库还是文件，还是远程接口，都是可以做核对的。缺点也很明显，时效性比较差，并且代码其实存在运行失败的情况，万一数据量很大的话扫表的压力相对而言比较大，扫表扫不动，导致OOM问题。
+
+另一种就是SQL，基本的原理其实就是通过join和子查询来进行查询。当然对于这种核心的系统需要使用其他手段进行处理，比如离线数仓。每天将数据同步到数仓中，之后在数仓中做SQL进行数据的核对。
+
+### 订单和库存的对账
+
+就是确保订单流水`trade_order_stream`和库存流水`collection_inventory_stream`数据一致性：
+
+- 流水类型：只查询库存扣减流水，`TRY_SALE`、`UNFREEZE_AND_SALE`和订单确认流水（`CONFIRM`）做匹配
+- 数量一致：订单购买`item_count`是否与库存变更的`changed_quantity`一致。
+- 幂等号一致：订单表的`order_id`和库存表的`identifier`进行匹配
+
+```sql
+select
+    o.order_id,
+    o.goods_id as collection_id,
+    o.gmt_create as order_time,
+    i.gmt_create as inventory_decrease_time,
+    o.item_count as order_quantity,
+    i.changed_quantity as inventory_quantity,
+    case
+        when i.identifier is null then '库存未扣减'
+        when o.item_count > i.changed_quantity then '库存扣减不足'
+        when o.item_count < i.changed_quantity then '库存多扣减'
+    end as check_status
+from trade_order_stream_0003 o
+left join collection_inventory_stream i
+ON o.order_id = i.identifier
+and o.goods_id = i.collection_id
+and o.goods_type = 'COLLECTION'
+and i.stream_type in ('TRY_SALE', 'UNFREEZE_AND_SALE')
+where o.order_state = 'CONFIRM'
+and o.deleted = 0
+and (i.deleted = 0 or i.identifier is null)
+and (
+    i.identifier is null -- 订单没有扣减
+    or o.item_count > i.changed_quantity -- 库存扣减不足
+    or o.item_count < i.changed_quantity -- 库存扣减过多
+    )
+```
+
+**如果是库存扣减成功了，但是订单没有创建，或者订单上商品数量不一致的情况**
+
+```sql
+SELECT 
+    i.identifier  AS order_id, 
+    i.collection_id AS collection_id,
+    NULL AS order_time,
+    i.gmt_create AS inventory_decrease_time,
+    NULL AS order_quantity,
+    i.changed_quantity AS inventory_quantity,
+    CASE 
+        WHEN o.order_id IS NULL THEN '库存扣减但订单未创建'
+        WHEN o.item_count <> i.changed_quantity THEN '库存扣减与订单数量不一致'
+    END AS check_result
+FROM collection_inventory_stream i
+LEFT JOIN trade_order_stream_0003 o
+ON i.identifier = o.order_id  
+AND i.collection_id = o.goods_id  
+AND o.goods_type = "COLLECTION"
+WHERE 
+i.stream_type IN ('TRY_SALE', 'UNFREEZE_AND_SALE')  
+AND i.deleted = 0
+AND (
+    o.order_id IS NULL  -- 库存扣减但无对应订单
+    OR o.item_count <> i.changed_quantity  -- 订单商品数量与库存变更数量不一致
+);
+```
+
+其实就是左连接的表换了，之后条件变了而已。
+
+#### SQL核对对线上业务造成影响怎么办？
+
+这种的话一般就需要考虑数据分离。业务对账的数据和线上的数据隔离开。
+
+数仓平台，考虑D+1的方式进行处理。定时将数据同步到数仓，之后在数仓跑SQL就可以了。
+
+其次如果不使用数仓的话可以采用备用库，当然这种的话需要接收一定的时间延迟。
+
+#### 核对出来的问题怎么处理？
+
+告警 + 人工解决
+
+通常情况下，并不是出现了一个数据不一致就告警，这样的话可能人工处理不过来，一般来说数量较少的话暂时不做处理，之后按照一定数量的错误为阈值做单独的告警，一起处理。因为出现问题的毕竟是少数。
+
+#### 如何解决时间差的问题？
+
+这种问题出现的原因其实大多数与第三方平台的延迟相关，比如用户是在23:59:59下单了，但是00：00:00出现问题了，我们一般不能采用D+1的方式进行处理，因为可能数据连接的时间不一致，隔天了。一般来说还是需要延迟处理，单独针对于某一段时间的数据进行单独对账。
+
+其次就是多次对账。
+
