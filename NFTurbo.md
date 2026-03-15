@@ -5481,6 +5481,10 @@ AND (
 
 其次就是多次对账。
 
+#### 支付核对
+
+
+
 ### Redis 和 MySQL的库存信息如何对账？
 
 我们的库存扣减其实都是存在流水的，Redis是通过Hset结构存储的，主要验证的方式有两种：一种是**旁路验证**，另一种是**定时任务**。
@@ -5496,4 +5500,57 @@ AND (
 当然这种情况的话肯定不能保证完全的数据一致，可能MQ还没有操作完成，check失败了，那么这种的话就需要定时任务来进行扫表处理了。
 
 #### 定时任务
+
+首先是获取热点商品，就是从Redis中的获取的热点Key中的Value，之后拿着这一些热点数据去Redis中查询到对应的流水记录，查找的是3S之前的数据，因为虽说我们设置了3S的延迟操作，但是MQ消费的时候还是很有可能没有消费成功，查找3S之前的数据便可以获取到执行成功的批量数据，之后去MySQL中对比库存数量，如果变更的数量和数据库中的变更数量相同，说明执行成功了，需要将Redis中的数据删除，之后再次拉取Redis中的数据的时候就会将这个数据删除掉。如果存在错误，可以通过钉钉、邮箱、微信等方式进行告警，监控告警即可。
+
+```java
+    @XxlJob("collectionInventoryCheckJob")
+    public ReturnT<String> execute() {
+
+        List<String> hotCollectionIds = goodsFacadeService.getHotGoods(GoodsType.COLLECTION.name());
+        for (String hotCollectionId : hotCollectionIds) {
+            InventoryRequest inventoryRequest = new InventoryRequest();
+            inventoryRequest.setGoodsId(hotCollectionId);
+            inventoryRequest.setGoodsType(GoodsType.COLLECTION);
+            MultiResponse<String> inventoryLogs = inventoryFacadeService.getInventoryDecreaseLogs(inventoryRequest);
+
+            for (String inventoryLog : inventoryLogs.getDatas()) {
+                InventoryCheckRequest inventoryCheckRequest = new InventoryCheckRequest();
+                JSONObject jsonObject = JSON.parseObject(inventoryLog);
+                Date createTime = new Date(jsonObject.getLong("timestamp"));
+
+                String action = jsonObject.getString("action");
+
+                //只处理3秒钟之前的数据，避免出现清理后导致重复扣减
+                //只处理库存扣减的流水，库存增加的流水不处理
+                if ("decrease".equals(action) && DateUtils.addSeconds(createTime, 3).compareTo(new Date()) < 0) {
+                    inventoryCheckRequest.setGoodsId(hotCollectionId);
+                    inventoryCheckRequest.setGoodsType(GoodsType.COLLECTION);
+                    inventoryCheckRequest.setGoodsEvent(GoodsEvent.TRY_SALE);
+                    inventoryCheckRequest.setChangedQuantity(Integer.valueOf(jsonObject.getString("change")));
+                    //因为项目过程中修改过Redisson的序列化的协议，历史代码写入的流水为 <"DECREASE_1019222537308167987200003">，优化后的新代码写入的流水为<DECREASE_1019222537308167987200003>
+                    String identifier = jsonObject.getString("by");
+                    //这是一坨兼容逻辑，因为项目过程中修改过Redisson的序列化的协议，所以出现两种情况
+                    if (identifier.lastIndexOf("\"") != -1) {
+                        inventoryCheckRequest.setIdentifier(identifier.substring(identifier.indexOf(SEPARATOR) + 1, identifier.lastIndexOf("\"")));
+                    } else {
+                        inventoryCheckRequest.setIdentifier(identifier.substring(identifier.indexOf(SEPARATOR) + 1));
+                    }
+                    // 比较的就是Redis中的库存扣减的数量和数据库中的库存扣减的数量是否一致
+                    InventoryCheckResponse response = inventoryCheckFacadeService.check(inventoryCheckRequest);
+                    //核对一致后清除redis中的流水
+                    if (response.getSuccess() && response.getCheckResult()) {
+                        inventoryRequest.setIdentifier(inventoryCheckRequest.getIdentifier());
+                        inventoryFacadeService.removeInventoryDecreaseLog(inventoryRequest);
+                    } else {
+                        //todo 告警推送
+                        // 推送钉钉、邮箱、微信之类的逻辑，只要是监控告警即可
+                    }
+                }
+            }
+        }
+
+        return ReturnT.SUCCESS;
+    }
+```
 
