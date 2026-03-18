@@ -409,3 +409,65 @@ public class PromptEngineerController implements InitializingBean {
 }
 ```
 
+### Spring AI 核心特性：提示词模板管理
+
+PromptTemplate，有一个默认的渲染器---> `StTemplateRenderer`，这个ST其实就是StringTemplate。
+
+- 基本使用
+
+```java
+    @GetMapping("/stream")
+    public Flux<String> stream(String topic) {
+        String template = """
+                请你给我推荐几个关于{topic}的开源项目
+                """;
+
+        PromptTemplate promptTemplate = new PromptTemplate(template);
+        promptTemplate.add("topic", topic);
+
+        return chatClient.prompt(promptTemplate.create()).stream().content();
+    }
+```
+
+或者
+
+```java
+    @GetMapping("/stream1")
+    public Flux<String> stream1(String topic) {
+        String template = """
+                请你给我推荐几个关于{topic}的开源项目
+                """;
+
+        PromptTemplate promptTemplate = new PromptTemplate(template);
+
+        return chatClient.prompt(promptTemplate.create(Map.of("topic", topic))).stream().content();
+    }
+```
+
+其中我们在提示词中预留了一个`topic`的位置用于之后的补充。
+
+上面的两段代码中分别是使用了`promptTemplate.add()`方法和`promptTemplate.create(Map<>)`方式处理的。
+
+我们也可以直接通过创建一个提示词文件，之后使用`@Value`的方式将文件内容读取出来，之后通过`PromptTemplate`相同的方式进行处理，默认是ST文件：`open-source-system-prompt.st`
+
+```st
+请给我推荐几个关于{topic}的开源项目，要求编程语言是{language}相关的。
+```
+
+```java
+    @Value("classpath:/templates/open_source_system_prompt.st")
+    private Resource systemTemplate;
+
+    @GetMapping("/file")
+    public Flux<String> file(String message, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+
+        HashMap<String, Object> map = new HashMap<>();
+        map.put("topic", message);
+        map.put("language", "Python");
+        PromptTemplate promptTemplate = PromptTemplate.builder().resource(systemTemplate).variables(map).build();
+
+        return chatClient.prompt(promptTemplate.create()).stream().content();
+    }
+```
+
