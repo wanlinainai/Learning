@@ -335,3 +335,77 @@ public class CallController {
     }
 ```
 
+### Spring AI 提示词工程
+
+此部分只展示代码实现了，主要就是用Spring AI来做的提示词工程，
+
+```java
+@RestController
+@RequestMapping("/prompt/engineer")
+public class PromptEngineerController implements InitializingBean {
+
+    @Autowired
+    private DashScopeChatModel chatModel;
+
+    private ChatClient chatClient;
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors()
+                .defaultSystem("你是一个数据提取助手")
+                .build();
+    }
+
+    @RequestMapping("/role")
+    public String role(String message) {
+        return chatClient.prompt(message).call().content();
+    }
+
+    @GetMapping("/shot")
+    public String shot(String message) {
+        return chatClient.prompt().system("""
+                请你根据用户输入的问题做出修改，主要有以下的改写策略：
+                1. 改写其中的错别字。
+                2. 做内容精简，帮用户输入的一堆废话精简成简单的一句话
+                可以参考以下案例：
+                
+                Input：ni好
+                Output：{"错别字修改": "你好", "内容精简": ""}
+                
+                Input：好认
+                Output：{"错别字修改": "好人", "内容精简": ""}
+                
+                Input：我今天心情不错，我想知道是因为什么导致的我今天心情很好？
+                Output：{"错别字修改": "", "内容精简": "今天什么天气？"}
+                
+                """)
+                .user(message)
+                .call()
+                .content();
+    }
+
+    @GetMapping("/structuredOutput")
+    public String structuredOutput(String message) {
+        return chatClient.prompt("帮我按照JSON格式类型的返回").user(message).call().content();
+    }
+
+    @GetMapping("/step")
+    public Flux<String> step(String message, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+
+        return chatClient.prompt("""
+                请输出JSON格式的故事概要和人名数量。请按照以下步骤进行思考，最终只需要输出JSON即可。
+                step 1: 用一句话概括下面文本。
+                step 2: 将摘要翻译成英文。
+                step 3: 将英文摘要中的出现的人名筛选出来，使用数组表示，比如：['Li Bai'、'Han xin'、....]
+                step 4: 输出一个 JSON 对象，其中包含以下键：english_summary、num_names。
+                最终输出：{"english_summary": "故事概要", "num_names": "2"}
+                """)
+                .system("你是一个AI")
+                .user(message)
+                .stream()
+                .content();
+    }
+}
+```
+
