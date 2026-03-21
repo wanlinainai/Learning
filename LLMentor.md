@@ -1,4 +1,4 @@
-# LLMentor
+# 	LLMentor
 
 ## 概述
 
@@ -470,4 +470,143 @@ PromptTemplate，有一个默认的渲染器---> `StTemplateRenderer`，这个ST
         return chatClient.prompt(promptTemplate.create()).stream().content();
     }
 ```
+
+### Spring AI 核心特性：结构化输出
+
+什么是结构化输出？
+
+当我们在做大模型相关的对话的时候，模型的回答是不固定的，所以我们要限制大模型输出范围。
+
+一般来说通用的是JSON格式化形式。
+
+#### StructuredOutputConverter
+
+Spring AI 在为了方便我们结构化的输出，提供了这样一个接口。作用就是向大模型提示中添加格式指令，为模型提供明确的指导，生成所需要的输出结构。
+
+![image-20260321184127288](images/LLMentor/image-20260321184127288.png)
+
+这是实现关系。
+
+#### BeanOutputConverter原理
+
+类中存在一个：`getFormat`方法。
+
+```java
+	@Override
+	public String getFormat() {
+		String template = """
+				Your response should be in JSON format.
+				Do not include any explanations, only provide a RFC8259 compliant JSON response following this format without deviation.
+				Do not include markdown code blocks in your response.
+				Remove the ```json markdown from the output.
+				Here is the JSON Schema instance your output must adhere to:
+				```%s```
+				""";
+		return String.format(template, this.jsonSchema);
+	}
+```
+
+其实这个方法就是最核心的格式化输出的提示词。将这一段提示词加到我们的问题之后就可以实现想要实现输出的JSON格式了。
+
+**如何使用？**
+
+```java
+PromptTemplate promptTemplate = new PromptTemplate("""
+							请帮我推荐几本心理相关的书籍：
+							{format}
+								""");
+return chatClient.prompt(promprTemplate.create(Map.of("format", beanOutputConverter.getFormat()).stream().content());
+```
+
+直接使用getFormat返回的内容替换{format}即可。
+
+如果需要转成实体类供我们自己使用：
+
+```java
+    @GetMapping("/call")
+    public String call(String message) {
+        PromptTemplate template = PromptTemplate.builder().template("给我推荐有关于 探索世界奥秘 相关的书籍，输出格式:{format}").build();
+        String response = chatClient
+                .prompt(template.create(Map.of("format", new BeanOutputConverter<>(Book.class).getFormat())))
+                .call()
+                .content();
+
+        BeanOutputConverter<Book> bookBeanOutputConverter = new BeanOutputConverter<>(Book.class);
+        Book book = bookBeanOutputConverter.convert(response);
+        return book.bookName() + " " + book.author() + " " + book.desc() + " " + book.price().divide(BigDecimal.valueOf(100)) + "元" + book.publisher();
+    }
+```
+
+在通过创建BeanOutputConverter的时候我们指定了Book.class类。
+
+Book类如下：(我们采用的是JDK14之后可以直接表示实体类的`record`方式)。
+
+```java
+public record Book(@JsonPropertyDescription("书名，以中文展示") String bookName,
+                   @JsonPropertyDescription("作者，以中文展示") String author,
+                   @JsonPropertyDescription("描述，以中文展示") String desc,
+                   @JsonPropertyDescription("价格，以分为单位") BigDecimal price,
+                   @JsonPropertyDescription("出版社") String publisher) {
+}
+```
+
+最终就会得到：
+
+```shell
+"{\n  \"author\": \"卡尔·萨根\",\n  \"bookName\": \"宇宙\",\n  \"desc\": \"一部探索宇宙起源、演化与人类在宇宙中位置的经典科普著作，以诗意语言揭示天文与科学的奥秘。\",\n  \"price\": 6800,\n  \"publisher\": \"上海科学技术出版社\"\n}"
+```
+
+#### 深入StructuredOutputConverter
+
+上述的格式化其实使我们调用大模型的时候自己调用`getFormat`方法获取的，但是SpringAI其实已经帮我们做好这一步了。
+
+```java
+    @GetMapping("/convert")
+    public String convert() {
+        Book book = chatClient.prompt("给我推荐一部玩家认为最伟大的日本厂商出品的开放世界大型游戏")
+                .call()
+                .entity(Book.class);
+
+        return book.bookName() + "，" + book.author() + "，" + book.desc() + "，" + book.price().divide(BigDecimal.valueOf(100)) + "元" + book.publisher();
+    }
+```
+
+我们可以直接通过`entity`方法将结果转成Book实体类。
+
+实际上entity本身也就是执行的`BeanOutputConverter`相关逻辑的。
+
+```java
+		@Override
+		@Nullable
+		public <T> T entity(Class<T> type) {
+			Assert.notNull(type, "type cannot be null");
+			var outputConverter = new BeanOutputConverter<>(type);
+			return doSingleWithBeanOutputConverter(outputConverter);
+		}
+```
+
+#### 转成List和Map
+
+如果我们需要转成一个List集合，上述的方式只是转成实体类，Map目前还没找到好的方法。虽然有`MapOutputConverter`,但是实际上还是不能实现我们的指定输出。
+
+**List**
+
+```java
+    @GetMapping("/convertList")
+    public String covertList() {
+        List<Book> books = chatClient.prompt("给我推荐几部关于心理学的书籍")
+                .call()
+                .entity(new ParameterizedTypeReference<List<Book>>() {
+                });
+
+        System.out.println(books.toString());
+        return books.toString();
+    }
+```
+
+使用的是：`ParameterizedTypeReference`，泛型换成List<Book>即可。
+
+
+
+
 
