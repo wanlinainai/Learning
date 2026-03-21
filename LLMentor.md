@@ -818,5 +818,33 @@ public class JdbcChatMemoryController implements InitializingBean {
 
 经过实际测试是实现效果的。
 
+### Spring AI核心特性： Advisor
+
+用于拦截、增强、修改Spring 应用中的AI交互功能，那就是Advisor，通过利用Advisor，开发者可以创建更加复杂、可重用抑郁维护的AI组件。
+
+可以将Advisor理解成 插件 。比如我们需要实现记忆功能
+
+```java
+  MessageChatMemoryAdvisor.builder(jdbcChatMemory).build())
+```
+
+如果要使用日志记录的功能需要实现：`SimpleLoggerAdvisor()`。
+
+```java
+new SimpleLoggerAdvisor(),
+```
+
+Spring Advisor中的各种类和接口的关系：
+
+![image-20260322011446324](images/LLMentor/image-20260322011446324.png)
+
+最深层的是`Ordered`。其次就是`Advisor`。
+
+继承自`Advisor`有`CallAdvisor`和`StreamAdvisor`两种。一个是用于同步调用的，一个是用以流式输出的。
+
+再往上走的话就是各种应用的Advisor。
+
+![image-20260322012437344](images/LLMentor/image-20260322012437344.png)
+
 
 
