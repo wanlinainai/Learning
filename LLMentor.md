@@ -606,6 +606,98 @@ public record Book(@JsonPropertyDescription("书名，以中文展示") String b
 
 使用的是：`ParameterizedTypeReference`，泛型换成List<Book>即可。
 
+### Spring AI 对话记忆
+
+分成短期记忆和长期记忆。
+
+#### 短期记忆
+
+在一次对话过程中，AI能够记得住你之前的聊天内容。可能只是局限于一个固定的上下文窗口中。
+
+#### 长期记忆
+
+也称为：“持久性记忆”和“外部记忆”。AI能够将重要的信息存储在对话之外（数据库、向量数据库中）。
+
+**特点**
+
+- 持久性：信息被保存在外部，不依赖于单次的对话上下文窗口。
+- 可扩展性：理论上可以存储海量信息，只受外部存储介质的影响。
+- 需要主动管理：用户可能需要手动添加、修改或者删除。
+- 丢失完整性：通常是以摘要的方式存储，势必会丢失对话细节。
+- 适用场景：更适合保存用户偏好、历史行为。不依赖上下文的复杂逻辑推理。
+
+#### Spring AI 实现记忆的方式
+
+##### 使用Message List来实现
+
+```java
+    @GetMapping("/call")
+    public String call(String message) {
+        ArrayList<Message> messageList = new ArrayList<>();
+
+        // 第一轮对话
+        messageList.add(new SystemMessage("你是一个游戏设计师"));
+        messageList.add(new UserMessage("我需要按照艾尔登法环设计一款类似的游戏"));
+        ChatResponse chatResponse = chatModel.call(new Prompt(messageList));
+        String content = chatResponse.getResult().getOutput().getText();
+        System.out.println(content);
+        System.out.println("=====================");
+
+        messageList.add(new AssistantMessage(content));
+
+        // 第二轮对话
+        messageList.add(new UserMessage("请帮我结合一些二刺猿的元素吗？"));
+        chatResponse = chatModel.call(new Prompt(messageList));
+        content = chatResponse.getResult().getOutput().getText();
+        messageList.add(new AssistantMessage(content));
+        System.out.println(content);
+        System.out.println("=====================");
+
+        // 第三轮对话
+        messageList.add(new UserMessage("如果我需要设计一些女性角色的任务角色，我应该做什么改进？"));
+        chatResponse = chatModel.call(new Prompt(messageList));
+        content = chatResponse.getResult().getOutput().getText();
+        System.out.println(content);
+        System.out.println("=====================");
+
+        return content;
+    }
+```
+
+##### 方式二：通过`chat_memory_conversation_id`
+
+上述的Message List每一次都需要重新添加进去，传给大模型，但是其实这种对话的历史的Message在代码中都是有所记录的。
+
+这个`chat_memory_conversation_id`其实就是一个参数，通过Advisor的方式注入。
+
+```java
+    @GetMapping("/callConversation")
+    public Flux<String> callConversation(String message, String chatId, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
+                .stream()
+                .content();
+    }
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(10).build();
+
+        this.chatClient = ChatClient.builder(chatModel)
+                // 实现 Logger 的 Advisor
+                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+                // 设置 ChatClient 中 ChatModel 的 Options 参数
+                .defaultOptions(
+                        DashScopeChatOptions.builder()
+                                .withTopP(0.7)
+                                .build()
+                )
+                .build();
+    }
+```
+
 
 
 
