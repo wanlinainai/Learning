@@ -698,7 +698,125 @@ public record Book(@JsonPropertyDescription("书名，以中文展示") String b
     }
 ```
 
+### Spring AI 持久化机制
 
+Spring AI中的记忆存储是基于`ChatMemoryRepository`接口实现的，默认提供了几种类型的持久化的方式：`**InMemoryChatMemoryRepository（基于内存）**`和`JdbcChatMemoryRepository（基于数据库）`。
+
+#### 使用MySQL实现消息的持久化
+
+Spring AI 提供了一种方式：
+
+```yaml
+spring:
+	ai:
+		chat:
+      memory:
+        repository:
+          jdbc:
+            platform: mysql
+            initialization-mode: ALWAYS
+```
+
+![image-20260322004300432](images/LLMentor/image-20260322004300432.png)
+
+我们在POM中添加对应的依赖：
+
+```xml
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+```
+
+提供依赖之后Spring AI会在：
+![image-20260322004453306](images/LLMentor/image-20260322004453306.png)
+
+中有部分的SQL操作，是在进行持久化存储的时候的用于存储的表结构的SQL：
+
+比如MySQL的：
+
+```sql
+CREATE TABLE `spring_ai_chat_memory` (
+  `conversation_id` varchar(36) CHARACTER SET utf8mb4 NOT NULL,
+  `content` text CHARACTER SET utf8mb4 NOT NULL,
+  `type` enum('USER','ASSISTANT','SYSTEM','TOOL') CHARACTER SET utf8mb4 NOT NULL,
+  `timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY `SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_TIMESTAMP_IDX` (`conversation_id`,`timestamp`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+;
+```
+
+引入MySQL的依赖
+
+```xml
+				<dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.33</version>
+        </dependency>
+```
+
+之后我们自定义一个用于JDBC的Bean`jdbcChatMemory`
+
+```java
+@Configuration
+public class JdbcChatMemoryConfiguration {
+
+    @Bean
+    public ChatMemory jdbcChatMemory(JdbcChatMemoryRepository jdbcChatMemoryRepository) {
+        return MessageWindowChatMemory.builder().chatMemoryRepository(jdbcChatMemoryRepository)
+                .maxMessages(20)
+                .build();
+    }
+}
+```
+
+实现`JdbcChatMemoryController`的接口类：
+
+```java
+@RestController
+@RequestMapping("/jdbc/memory")
+public class JdbcChatMemoryController implements InitializingBean {
+    @Autowired
+    private DashScopeChatModel chatModel;
+
+    private ChatClient chatClient;
+
+    @GetMapping("/callByDb")
+    public Flux<String> callByDb(String message, String chatId, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
+                .stream()
+                .content();
+    }
+
+
+    @Autowired
+    private ChatMemory jdbcChatMemory;
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        chatClient = ChatClient.builder(chatModel)
+                .defaultOptions(DashScopeChatOptions.builder().temperature(0.7).build())
+                .defaultAdvisors(
+                        new SimpleLoggerAdvisor(),
+                        MessageChatMemoryAdvisor.builder(jdbcChatMemory).build())
+                .defaultSystem("你是一个用于回答问题的助手，回答问题的话只需要做出简短回答即可")
+                .build();
+    }
+}
+```
+
+通过接口向大模型提问，查看数据库中存储的数据条数和数据结构：
+
+![image-20260322004927954](images/LLMentor/image-20260322004927954.png)
+
+如果在重启服务器之后重新向大模型提问：**我是谁？**。会发现大模型还是会进行回复：**张德彪。**
+
+经过实际测试是实现效果的。
 
 
 
