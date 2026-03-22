@@ -1288,5 +1288,238 @@ public class RedisChatMemoryStore implements ChatMemoryStore {
 
 > 注意：在使用`MessageWindowChatMemory.builder()`过程中，`chatMemoryStore`和`id`一定要实现，尤其是`id`，这个ID指的就是记忆会话的ID，不然默认的话就是default。`chatMemoryStore`用的就是自定义的`redisChatMemoryStore`。
 
+### Function Call
+
+也成为：Tool Calling。为了解决因为大模型本身的局限性导致的信息检索能力不足。
+
+如果我询问今天天气怎么样？大模型本身是不会知道的，因为大模型都是有滞后性的，同时不存在检索能力。所以我们可以使用自定义的工具来帮大模型完善它的功能。
+
+需要注意：大模型本身并不负责工具函数的执行和调用。它只是会根据提问输出答案，具体的执行还是需要开发者自行设计。
+
+#### Function calling 过程
+
+![image-20260322214730822](images/LLMentor/image-20260322214730822.png)
+
+1. 向大模型发送可能包含调用工具的请求
+2. 从模型接收一个工具调用的结果（包含工具和相关参数）
+3. 在应用端执行代码，使用工具调用的输入
+4. 使用工具输出向模型发起第二次请求，带有工具调用的结果
+5. 接收模型返回的最终响应。
+
+#### 函数定义
+
+| 字段        | 描述                       |
+| ----------- | -------------------------- |
+| type        | 固定：function             |
+| name        | 函数的名称：`get_weather`  |
+| description | 关于工具的描述             |
+| parameters  | 入参的JSON模式             |
+| strict      | 对函数调用是否执行严格模式 |
+
+#### 使用APIFox向大模型发送请求看看
+
+```json
+{
+    "model": "qwen-plus",
+    "messages": [
+        {
+            "role": "user",
+            "content": "今天济南的天气怎么样？帮我搜索一下济南最值得吃的餐馆饭店。"
+        }
+    ],
+    "temperature": 0.7,
+    "stream": false,
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "getWeather",
+                "description": "根据城市名称获取对应天气",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "城市名称"
+                        }
+                    },
+                    "required": ["city"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "根据提示搜索网络内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "城市名称"
+                        },
+                        "favorite": {
+                            "type": "string",
+                            "description": "最值得的店名"
+                        }
+                    },
+                    "required": ["city"]
+                }
+            }
+        }
+    ]
+}
+```
+
+得到的结果：
+
+```json
+{
+    "model": "qwen-plus",
+    "id": "chatcmpl-c7f66925-e29c-98db-b418-c8e430e32656",
+    "choices": [
+        {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_01af9718d7024513a09d4a",
+                        "type": "function",
+                        "function": {
+                            "name": "getWeather",
+                            "arguments": "{\"city\": \"济南\"}"
+                        }
+                    },
+                    {
+                        "index": 1,
+                        "id": "call_fc32da2e49ba4e728a62b2",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": "{\"city\": \"济南\", \"favorite\": \"最值得吃的餐馆饭店\"}"
+                        }
+                    }
+                ],
+                "role": "assistant"
+            },
+            "index": 0,
+            "finish_reason": "tool_calls"
+        }
+    ],
+    "created": 1774187053,
+    "object": "chat.completion",
+    "usage": {
+        "total_tokens": 297,
+        "completion_tokens": 48,
+        "prompt_tokens": 249,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        }
+    }
+}
+```
+
+仔细观察可以发现，其中的`tool_calls`是存在两种的，一个是`getWeather`，另一个是`search`。`tool_calls`可能存在多个工具，所以是一个数组。
+
+### Spring AI FunctionCall使用
+
+#### 已有方法转成工具
+
+假设我已经存在某一个现成的服务了，我想要将他变成一个Function（Tool），可以怎么弄？
+
+```java
+@Configuration
+public class FunctionCallConfiguration {
+
+    @Bean
+    @Description("根据用户的输入时区获取当前时区的当前时间")
+    public Function<TimeService.Request, TimeService.Response> getTimeFunction(TimeService timeService) {
+        return timeService::getTimeByZoneId;
+    }
+}
+```
+
+我们定义一个Bean，返回值是Function类型，入参是我们已经存在的Spring 的服务应用，在这个方法中直接调用这个方法即可，将拿到的返回值返回到上游服务。
+
+> 注意：在定义这个Bean的时候需要明确表名这个方法的描述作用（语义清晰）`@Description`
+
+```java
+@Service
+public class TimeService {
+
+    public Response getTimeByZoneId(Request request) {
+        ZoneId zoneId = ZoneId.of(request.zoneId);
+        ZonedDateTime zonedDateTime = ZonedDateTime.now(zoneId);
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z");
+        return new Response(zonedDateTime.format(formatter));
+    }
+
+    public record Request(@JsonProperty(required = true, value = "zoneId")
+                          @JsonPropertyDescription("时区，比如 Asia/Shanghai") String zoneId) {
+
+    }
+
+    public record Response(String time) {
+
+    }
+}
+```
+
+#### 定义新工具
+
+如果之前没有相关的工具方法，我们想要重新定义一个工具给LLM的话，可以直接借助`@Tool`注解来实现。
+
+```java
+public class TimeTools {
+    @Tool
+    public String getTimeByZoneId(@ToolParam(description = "Time zoneId, such as Asia/Shanghai") String zoneId) {
+        System.out.println("getTimeByZoneId Tools ，zoneId = " + zoneId);
+        ZoneId zid = ZoneId.of(zoneId);
+        ZonedDateTime zonedDateTime = ZonedDateTime.now(zid);
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z");
+        return zonedDateTime.format(formatter);
+    }
+ }
+```
+
+@Tool注解表示方法是一个工具，@ToolParam表示每一个参数的描述。
+
+之后便可以在chatClient使用tools来使用：`chatClient.prompt().tools(new TimeTools()).user(query).call().content()`
+
+```java
+@RestController
+@RequestMapping("/function")
+@Slf4j
+@RequiredArgsConstructor
+public class FunctionCallController {
+    @Autowired
+    private OpenAiChatModel chatModel;
+
+    private ChatClient chatClient;
+
+    @PostConstruct
+    public void init() {
+        ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(2).build();
+        chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+                .build();
+    }
+
+    @GetMapping("/chat")
+    public String chat(@RequestParam("query") String query) {
+        log.info("Chat Request ====> {}", query);
+
+//        return chatClient.prompt().toolNames("getTimeFunction").user(query).call().content();
+        return chatClient.prompt().tools(new TimeTools()).user(query).call().content();
+    }
+}
+```
+
+#### 外部工具调用
+
+参考：https://java2ai.com/docs/1.0.0.2/practices/integrations/tool-calling/
+
 
 
