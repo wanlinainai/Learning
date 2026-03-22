@@ -1219,5 +1219,74 @@ public class TemperatureTools {
 4. 向LLM发起对话，携带着执行工具的结果
 5. LLM返回，告知最终的结果
 
+### Langchain4J 持久化
+
+官方并没有给实现相关的数据库也好、Redis也好相关的实现，如果要实现持久化的话需要开发者手动实现。
+
+Langchain4J中，有一个内置的`ChatMemoryStore`接口，可以基于这个来实现内存记忆。
+
+![image-20260322210423143](images/LLMentor/image-20260322210423143.png)
+
+其中存在三个方法 ：获取消息、更新消息、删除消息。
+
+我们以Redis来举例子：
+
+首先需要实现这个接口
+
+```java
+@Component
+public class RedisChatMemoryStore implements ChatMemoryStore {
+
+    private final RedisTemplate<String, String> redisTemplate;
+    public RedisChatMemoryStore(RedisTemplate<String, String> redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    @Override
+    public List<ChatMessage> getMessages(Object memoryId) {
+        String key = buildKey(memoryId);
+        String jsonValue = redisTemplate.opsForValue().get(key);
+        if (StringUtils.isEmpty(jsonValue)) {
+            return Collections.emptyList();
+        }
+        return ChatMessageDeserializer.messagesFromJson(jsonValue);
+    }
+
+    @Override
+    public void updateMessages(Object memoryId, List<ChatMessage> messages) {
+        String key = buildKey(memoryId);
+        String value = ChatMessageSerializer.messagesToJson(messages);
+        redisTemplate.opsForValue().set(key, value);
+    }
+
+    @Override
+    public void deleteMessages(Object memoryId) {
+        redisTemplate.delete(buildKey(memoryId));
+    }
+
+    private String buildKey(Object memoryId) {
+        return "langchain4J:chat_memory:" + memoryId;
+    }
+}
+```
+
+之后在我们的Controller中初始化Bean的时候处理相关的存储相关的记忆：
+
+```java
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        langChainMemoryAiService = AiServices.builder(LangChainMemoryAiService.class)
+                .chatModel(chatModel)
+                .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
+                        .id(memoryId) // 此处的ID是必须要的，如果不加的话默认就是default，所有的会话都是共享的
+                        .maxMessages(2)
+                        .chatMemoryStore(redisChatMemoryStore)
+                        .build())
+                .build();
+    }
+```
+
+> 注意：在使用`MessageWindowChatMemory.builder()`过程中，`chatMemoryStore`和`id`一定要实现，尤其是`id`，这个ID指的就是记忆会话的ID，不然默认的话就是default。`chatMemoryStore`用的就是自定义的`redisChatMemoryStore`。
+
 
 
