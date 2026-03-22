@@ -846,5 +846,232 @@ Spring Advisor中的各种类和接口的关系：
 
 ![image-20260322012437344](images/LLMentor/image-20260322012437344.png)
 
+## Langchain4J
 
+yaml相关配置
+```yaml
+spring:
+  application:
+    name: LangChain4J
+  data:
+    redis:
+      host: *********
+      port: 6379
+      database: 0
+      timeout: 5s
+      password: 
+
+server:
+  port: 8022
+
+langchain4j:
+  open-ai:
+    chat-model:
+      api-key: @dashscope.api.key@
+      model-name: qwen3.5-plus
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      log-requests: true
+      log-responses: true
+```
+
+### 低层次API的使用
+
+#### ChatModel
+
+类似于Spring AI 中的ChatModel。
+
+#### ChatMessage
+
+就是Spring AI 中的Message，也是区分了用户消息、系统消息、工具调用、AI消息等。
+
+#### ChatRequest
+
+主要就是做一些模型交互时的配置相关的，比如：temperature、topN、topK等等。
+
+### 流式输出
+
+Langchain4J的流式输出和Spring AI的流式输出不一样，Langchain4J的流式输出需要配置的内容很多。
+
+```yaml
+langchain4j:
+    streaming-chat-model:
+      api-key: @dashscope.api.key@
+      model-name: qwen3.5-plus
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      log-requests: true
+      log-responses: true
+```
+
+增加完配置之后使用：OpenAiStreamingChatModel进行流式输出的时候还是很麻烦的，
+
+```java
+    @GetMapping("/streamHello")
+    public Flux<String> streamHello(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        Flux<String> flux = Flux.create(fluxSink -> {
+            streamingChatModel.chat("你好，给我推荐一些广东美食?", new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String partialResponse) {
+                    fluxSink.next(partialResponse);
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse completeResponse) {
+                    fluxSink.complete();
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    fluxSink.error(error);
+                }
+            });
+        });
+        return flux;
+    }
+```
+
+综合上述代码来看，如果需要实现前端流式输出的话还是需要加上Flux自己转，重写三个方法实现流式输出。
+
+### 对话记忆
+
+一种是利用List来进行存储，另一种就是利用ChatMemory来进行处理
+
+```java
+    @GetMapping("/memory")
+    public String memory(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        ArrayList<ChatMessage> messages = new ArrayList<>();
+
+        // 第一轮对话
+        messages.add(new SystemMessage("你是一个点餐智能助手"));
+        messages.add(new UserMessage("帮我点一个汉堡，两个鸡腿，一杯可乐"));
+        AiMessage answer = chatModel.chat(messages).aiMessage();
+        System.out.println(answer);
+        System.out.println("== 第一轮对话结束 ==");
+
+        // 第二轮对话
+        messages.add(new UserMessage("刚才我点的有点多，帮我将去掉一个鸡腿，加上一杯可乐吧"));
+        AiMessage answerTwo = chatModel.chat(messages).aiMessage();
+        System.out.println(answerTwo);
+        System.out.println("== 第二轮对话结束 ==");
+
+        // 第三轮对话
+        messages.add(new UserMessage("总结一下我最终点了哪一些内容"));
+        AiMessage answerThree = chatModel.chat(messages).aiMessage();
+        System.out.println(answerThree);
+        System.out.println("== 第三轮对话结束 ==");
+
+        return answerThree.text();
+    }
+```
+
+```java
+    @GetMapping("/memory1")
+    public String memory1(HttpServletResponse response) {
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(3);
+
+        // 第一轮对话
+        chatMemory.add(systemMessage("你是一个点餐小助手"));
+        chatMemory.add(userMessage("给我点一份汉堡，两个鸡腿，一杯可乐"));
+        AiMessage answer = chatModel.chat(chatMemory.messages()).aiMessage();
+        System.out.println(answer);
+        System.out.println("== 第一轮对话结束 ==");
+
+        // 第二轮对话
+        chatMemory.add(userMessage("刚才我点的有点多，帮将去掉一个鸡腿，加上一杯可乐吧"));
+        AiMessage answerTwo = chatModel.chat(chatMemory.messages()).aiMessage();
+        System.out.println(answerTwo);
+        System.out.println("== 第二轮对话结束 ==");
+
+        // 第三轮对话
+        chatMemory.add(userMessage("总结一下我最终点了哪一些内容"));
+        AiMessage answerThree = chatModel.chat(chatMemory.messages()).aiMessage();
+        System.out.println(answerThree);
+        System.out.println("== 第三轮对话结束 ==");
+        return answerThree.text();
+    }
+```
+
+### 结构化输出
+
+相较于Spring AI 的OutputConverter而言实现的效果并不好。
+
+```java
+    @GetMapping("/structure")
+    public String structure(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+
+        // 构造格式化的输出
+        ResponseFormat responseFormat = ResponseFormat.builder()
+                .type(ResponseFormatType.JSON)
+                .jsonSchema(JsonSchema.builder()
+                        .name("Person")
+                        .rootElement(JsonObjectSchema.builder()
+                                .addStringProperty("name")
+                                .addIntegerProperty("age")
+                                .addNumberProperty("height")
+                                .addBooleanProperty("married")
+                                .required("name", "age", "height", "married")
+                                .build())
+                        .build())
+                .build();
+
+        ChatRequest chatRequest = ChatRequest.builder()
+                .responseFormat(responseFormat)
+                .messages(UserMessage.from("""
+                        Extract the person information and return it in JSON format.
+                        John is 42 years old and lives an independent life.
+                        He stands 1.75 meters tall and carries himself with confidence.
+                        Currently unmarried, he enjoys the freedom to focus on his personal goals and interests.
+                        """))
+                .build();
+
+        return chatModel.chat(chatRequest).aiMessage().text();
+    }
+```
+
+> 如果是使用的百炼的平台模型，在格式化的时候需要手动指定需要转换的格式，比如：将输出结果转换成JSON格式。如果不特殊指定的话会报错。
+
+### 工具调用
+
+```java
+    @GetMapping("/tool")
+    public String tool() {
+        List<ToolSpecification> toolSpecifications = ToolSpecifications.toolSpecificationsFrom(TemperatureTools.class);
+
+        UserMessage userMessage = UserMessage.from("2026年3月22日，济南的天气怎么样?");
+        ArrayList<ChatMessage> chatMessages = new ArrayList<>();
+        chatMessages.add(userMessage);
+
+        ChatRequest request = ChatRequest.builder()
+                .messages(userMessage)
+                .toolSpecifications(toolSpecifications)
+                .toolChoice(ToolChoice.AUTO)
+                .build();
+
+        ChatResponse response = chatModel.chat(request);
+        AiMessage aiMessage = response.aiMessage();
+
+        chatMessages.add(aiMessage);
+
+        // 执行工具
+        List<ToolExecutionRequest> toolExecutionRequests = response.aiMessage().toolExecutionRequests();
+        toolExecutionRequests.forEach(toolExecutionRequest -> {
+            ToolExecutor toolExecutor = new DefaultToolExecutor(new TemperatureTools(), toolExecutionRequest);
+            System.out.println("execute tool " + toolExecutionRequest.name());
+            String result = toolExecutor.execute(toolExecutionRequest, UUID.randomUUID().toString());
+            ToolExecutionResultMessage toolExecutionResultMessage = ToolExecutionResultMessage.from(toolExecutionRequest, result);
+            chatMessages.add(toolExecutionResultMessage);
+        });
+
+        // 返回结果
+        ChatRequest finalRequest = ChatRequest.builder()
+                .messages(chatMessages)
+                .toolSpecifications(toolSpecifications)
+                .build();
+
+        ChatResponse finalResponse = chatModel.chat(finalRequest);
+        return finalResponse.aiMessage().text();
+    }
+```
 
