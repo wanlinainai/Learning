@@ -1521,5 +1521,219 @@ public class FunctionCallController {
 
 参考：https://java2ai.com/docs/1.0.0.2/practices/integrations/tool-calling/
 
+### PDD退款AI
 
+目标：针对用户反馈的商品质量问题，自动帮买家退款。如果是其他问题就安抚用户的情绪。
 
+1. 提示词工程 
+2. Function Call
+3. Spring AI
+4. 对话记忆
+5. 流式输出
+6. 结构化输出
+
+#### 提示词工程
+
+**角色定义：**你是一名专业的电商平台客户体验专家，你的核心职责是高效、准确地处理用户关于商品的反馈。你的首要任务是敏锐识别用户对商品质量的严重不满，并在确认后立即主动为用户申请退款，以最大化客户满意度和信任度。
+
+**FewShot：**例如：“根本没法用”、“是坏的”、“有瑕疵”、“质量太差了”
+
+**COT思维链：**规定了LLM的第一步、第二步、第三步做什么。
+
+```pt
+# Role
+你是一名专业的电商平台客户体验专家，你的核心职责是高效、准确地处理用户关于商品的反馈。你的首要任务是敏锐识别用户对商品质量的严重不满，并在确认后立即主动为用户申请退款，以最大化客户满意度和信任度。
+
+# Task
+请严格遵循以下步骤与用户进行对话：
+
+第一步：主动识别与确认
+
+倾听与分析： 仔细阅读用户输入，寻找表明对商品质量严重不满的关键词和情绪，例如：
+
+“根本没法用”、“是坏的”、“有瑕疵”、“质量太差了”
+
+“和描述完全不符”、“严重色差”、“尺寸根本不对”
+
+“一用就坏了”、“有安全隐患”
+
+“我要投诉”、“这简直是欺诈”
+
+共情与确认： 一旦识别出潜在问题，首先表达共情和理解。然后，必须用封闭式问题确认问题的具体性质，以判断是否符合“质量问题退款”标准。
+
+正确示范： “非常抱歉给您带来了不好的体验。您是说刚收到的这件衣服袖口已经完全开线了，对吗？”
+
+避免使用： “您有什么问题？”（过于开放）
+
+第二步：判断与执行退款
+
+触发条件：当用户确认了你上一步中提到的具体质量问题（例如，用户回答“对的，就是开线了”或“是的，完全用不了”）时，即视为满足“严重质量问题”标准。
+
+立即行动：无需用户主动提出，你应直接、明确地告知用户你将为其申请退款。
+
+标准话术：“我完全理解，这确实属于严重的质量问题。为了节约您的时间，我将立即为您发起退款申请。款项将按原路径在1-7个工作日内退回，请您注意查收。”
+
+第三步：后续安抚与闭环
+
+表达歉意： 再次为不佳的购物体验向用户致歉。
+
+提供确定性： 告知用户下一步会发生什么，以及他们无需再做任何事。
+
+标准话术： “再次为这次不愉快的购物向您表示诚挚的歉意。退款流程已经启动，您无需再进行其他操作。感谢您的反馈，这帮助我们改进了商品品质。”
+
+3. Limit
+仅处理质量问题： 仅对明确的“商品质量”问题执行此流程。对于“不喜欢”、“尺寸不合适（非描述不符）”、“物流慢”等问题，请按常规客诉流程处理（如换货、补偿优惠券等），不要直接退款。
+
+不索要额外信息： 在此流程中，默认系统已有用户的订单信息，不要向用户索要订单号、手机号等隐私信息，确保流程顺畅。
+```
+
+> 其中有几点需要注意的：
+>
+> 1. 用户第一次询问的时候不能直接退款，需要先确认
+> 2. 确认的时候只能识别：`对的`或者`是的`
+
+#### 对话记忆
+
+```java
+    @PostConstruct
+    public void init() {
+        ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(100).build();
+        chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build(), new SimpleLoggerAdvisor())
+                .defaultSystem(systemPrompt)
+                .build();
+    }
+```
+
+也可以直接使用Spring AI提供的ChatMemory。
+
+#### 结构化输出
+
+第一轮对话需要返回到前端信息，主要就是对话ID和对话状态。
+
+```java
+public record ChatOrder(@JsonPropertyDescription("订单号") String orderId,
+                        @JsonPropertyDescription("用户ID") String userId,
+                        @JsonPropertyDescription("对话ID") String chatId,
+                        @JsonPropertyDescription("对话状态") ChatStatus status) {
+}
+```
+
+```java
+public enum ChatStatus {
+
+    CHAT_START,
+    CHAT_END,
+    CHAT_CANCEL
+}
+```
+
+```java
+    @GetMapping("/newChat")
+    public ChatOrder newChat(String userId, String orderId, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+
+        String chatId = UUID.randomUUID().toString();
+
+        return chatClient.prompt()
+                .user(String.format("我要咨询订单相关的售后问题，我的用户ID是: %s,我的订单号是: %s，本地的对话ID是: %s, 当前对话状态是：%s", userId, orderId, chatId, ChatStatus.CHAT_START.name()))
+                .advisors(advisorSpec -> advisorSpec.param(ChatMemory.CONVERSATION_ID, chatId)
+                        .param("chat_memory_retrieve_size", 100))
+                .call()
+                .entity(ChatOrder.class);
+    }
+```
+
+主要的作用就是生成一个chatId作为上下文ID。
+
+#### Function Call
+
+假设我们原本已经存在一个退款服务了：
+
+```java
+@Service
+public class OrderManageService {
+    /**
+     * 订单退款操作
+     * @param orderId
+     * @param reason
+     * @return
+     */
+    public String refund(String orderId, String reason) {
+        System.out.println("退款成功");
+        return UUID.randomUUID().toString();
+    }
+
+    public String getOrderId(String orderId) {
+        return "订单号是:" + orderId;
+    }
+}
+```
+
+我们自定义一个订单工具：
+
+```java
+@Component
+public class OrderTool {
+
+    @Autowired
+    private OrderManageService orderManageService;
+
+    @Tool(name = "apply_refund", description = "根据用户传递过来的订单信息发起退款")
+    public String refund(@ToolParam(description = "订单编号，为数字类型") String orderId,
+                         @ToolParam(description = "商品名称") String name,
+                         @ToolParam(description = "退款原因") String reason) {
+        System.out.println("已经为商品：" + name + "，订单号：" + orderId + "申请退款，原因：" + reason);
+
+        orderManageService.refund(orderId, reason);
+
+        return "已为商品：" + name + ",订单号：" + orderId + "申请退款 , 退款原因： " + reason;
+    }
+}
+```
+
+在对话中使用这个Tool
+
+```java
+    @GetMapping("/ask")
+    public Flux<String> ask(String question, String chatId, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+
+        Flux<String> result = chatClient.prompt()
+                .user(question)
+                .tools(orderTool)
+                .advisors(advisorSpec -> advisorSpec.param(ChatMemory.CONVERSATION_ID, chatId)
+                        .param("chat_memory_retrieve_size", 100))
+                .stream()
+                .content();
+
+        return result;
+    }
+```
+
+效果：
+
+第一轮对话：
+
+![image-20260323012644517](images/LLMentor/image-20260323012644517.png)
+
+拿到chatId进行/ask
+
+![image-20260323012618452](images/LLMentor/image-20260323012618452.png)
+
+首先会进行确认，之后我们说：是的
+
+![image-20260323012734090](images/LLMentor/image-20260323012734090.png)
+
+同时查看控制台日志：
+
+![image-20260323012801024](images/LLMentor/image-20260323012801024.png)
+
+> 问题之一：
+>
+> 我们现在使用的是DashScopeChatModel，但是如果换成OpenAiChatModel的话就会出现调用到Tool的时候参数全部都是null的情况，所以不同的ChatModel实现方式是有区别的，排查了好久。
+> 问题出在：大模型流式输出的时候，返回的Function这个字段是一次性返回的，还是分段返回的。
+>
+> 当function_call流式输出的时候，判定这次需要的工具，大模型可能会一次性返回，也有可能每一次返回一个小的Chunk，这种方式正确的逻辑是：检测到tool_call，汇聚arguments，进行拼接，直至没有tool_call了，最后进行调用，但是Spring AI对于这一部分处理逻辑是存在问题的。
+>
+> 
