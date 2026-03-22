@@ -888,7 +888,7 @@ langchain4j:
 
 主要就是做一些模型交互时的配置相关的，比如：temperature、topN、topK等等。
 
-### 流式输出
+#### 流式输出
 
 Langchain4J的流式输出和Spring AI的流式输出不一样，Langchain4J的流式输出需要配置的内容很多。
 
@@ -932,7 +932,7 @@ langchain4j:
 
 综合上述代码来看，如果需要实现前端流式输出的话还是需要加上Flux自己转，重写三个方法实现流式输出。
 
-### 对话记忆
+#### 对话记忆
 
 一种是利用List来进行存储，另一种就是利用ChatMemory来进行处理
 
@@ -992,7 +992,7 @@ langchain4j:
     }
 ```
 
-### 结构化输出
+#### 结构化输出
 
 相较于Spring AI 的OutputConverter而言实现的效果并不好。
 
@@ -1032,7 +1032,7 @@ langchain4j:
 
 > 如果是使用的百炼的平台模型，在格式化的时候需要手动指定需要转换的格式，比如：将输出结果转换成JSON格式。如果不特殊指定的话会报错。
 
-### 工具调用
+#### 工具调用
 
 ```java
     @GetMapping("/tool")
@@ -1074,4 +1074,150 @@ langchain4j:
         return finalResponse.aiMessage().text();
     }
 ```
+
+### 高级API的使用
+
+主要其实是利用Langchain4J的`@AiService`注解。定义一个接口，并使用`@AiService`标记
+
+```java
+@AiService
+public interface LangChainAiService {
+    String chat(String userMessage);
+
+    Flux<String> chatStream(String userMessage);
+
+    @SystemMessage("你是一个毒舌回复助手，擅长怼人")
+    @UserMessage("针对用户的内容，{{topic}}，先复述一遍他的问题，之后再回答")
+    Flux<String> chatTemplate(String topic);
+
+    @SystemMessage("你是一个图书管理员")
+    @UserMessage("帮我推荐一部最好的心理学的书籍")
+    Book getBooks();
+}
+```
+
+如上代码，其中使用了@AiService标识这个接口是一个AI注册容器中。
+
+其中包含：非流式聊天、流式聊天、流式模板输出、获取格式化的对象Bean。
+
+使用Controller：
+
+```java
+@RestController
+@RequestMapping("/langchain/high")
+public class LangChainHighLevelController implements InitializingBean {
+
+    @Autowired
+    private LangChainAiService aiService;
+
+    @GetMapping("/chat")
+    public String chat(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return aiService.chat("日本都有什么美食?");
+    }
+
+    @GetMapping("/chatStream")
+    public Flux<String> chatStream(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return aiService.chatStream("日本都有什么美食?");
+    }
+
+    @GetMapping("/chatTemplate")
+    public Flux<String> chatTemplate(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return aiService.chatTemplate("我饿了");
+    }
+
+    @GetMapping("/structure1")
+    public String structure1(HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        Book book = aiService.getBooks();
+        return JSON.toJSONString(book);
+    }
+
+    @Autowired
+    private ChatModel chatModel;
+
+    LangChainMemoryAiService langChainMemoryAiService;
+
+    @GetMapping("/memoryChat")
+    public String memoryChat(String message, String chatId, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return langChainMemoryAiService.chatMemory(chatId, message);
+    }
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        langChainMemoryAiService = AiServices.builder(LangChainMemoryAiService.class)
+                .chatModel(chatModel)
+                .chatMemoryProvider(memoryId -> MessageWindowChatMemory.withMaxMessages(3))
+                .build();
+    }
+
+    @GetMapping("/toolCalling")
+    public String toolCalling(HttpServletResponse response, String message) {
+        response.setCharacterEncoding("UTF-8");
+        LangChainAiService langChainAiService = AiServices.builder(LangChainAiService.class)
+                .tools(new TemperatureTools())
+                .chatModel(chatModel)
+                .build();
+
+        return langChainAiService.chat(message);
+    }
+}
+```
+
+如上代码中其实包含了之前接口中的四种方法以及记忆和工具调用方法。
+
+**记忆**
+
+我们使用的是自定义的记忆接口：
+
+```java
+@AiService
+public interface LangChainMemoryAiService {
+    String chatMemory(@MemoryId String memoryId, @UserMessage String userMessage);
+}
+```
+
+`@MemoryId`指的是记忆ID，`@UserMessage`指的是用户提问问题。
+
+使用的话首先是在Bean 初始化之前单独处理：
+
+```java
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        langChainMemoryAiService = AiServices.builder(LangChainMemoryAiService.class)
+                .chatModel(chatModel)
+                .chatMemoryProvider(memoryId -> MessageWindowChatMemory.withMaxMessages(3))
+                .build();
+    }
+```
+
+builder中构建了一个我们自定义的接口，使用的是Langchain的chatModel。
+
+**工具调用**
+
+工具调用的话相比较之前的低层次API来说就简单许多了，在使用`AiServices`的时候设置tools为我们自定义的Tool工具。
+
+```java
+public class TemperatureTools {
+    @Tool
+    public String getTemperatureByCityAndDate(@P("city for get temperature") String city,
+                                              @P("date for get temperature") String date) {
+        System.out.println("getTemperatureByCityAndDate 工具被调用");
+        return "23.5摄氏度";
+    }
+}
+```
+
+执行流程：
+
+1. 向LLM发起对话，指定工具
+2. LLM返回告知需要使用哪一个工具
+3. 执行工具调用
+4. 向LLM发起对话，携带着执行工具的结果
+5. LLM返回，告知最终的结果
+
+
 
