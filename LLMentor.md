@@ -1735,5 +1735,358 @@ public class OrderTool {
 > 问题出在：大模型流式输出的时候，返回的Function这个字段是一次性返回的，还是分段返回的。
 >
 > 当function_call流式输出的时候，判定这次需要的工具，大模型可能会一次性返回，也有可能每一次返回一个小的Chunk，这种方式正确的逻辑是：检测到tool_call，汇聚arguments，进行拼接，直至没有tool_call了，最后进行调用，但是Spring AI对于这一部分处理逻辑是存在问题的。
+
+## MCP
+
+### 什么是MCP？
+
+全称：**Model Context Protocol（模型上下文协议）**。是一个通用的开源标准协议，用于安全、高效连接智能体应用与外部工具。核心理念是赋予USB接口的功能；
+
+只要遵守统一的协议，就能标准化调用各种外部工具，从而即插即用。
+
+按照之前的方式来说，如果想在Agent中读取数据库，那么就需要在这个Agent中专门写一段function Call代码。如果更换了Agent，还是想要使用读取数据库操作，这些重复的Function call代码还需要重新写一遍。有了MCP之后，只需要将这个操作包装成**MCP Server**。任何Client都能直接连接上这个Server使用工具。
+
+![image-20260323214058318](images/LLMentor/image-20260323214058318.png)
+
+> 上述图是MCP架构图。
 >
-> 
+> 很明显能感受到MCP的交通枢纽作用，左侧是智能体客户端（如Claude、IDE）等和右侧的工具（如数据库、文件操作等）。能将原本没有复用性的点对点连接简化成统一的接口调用，意味着只要支持MCP 标准，左侧的任意客户端应用都能“即插即用”连接右侧的任意工具，真正意义上实现了智能体和工具的**功能解耦**。
+
+#### MCP和Function Call有什么区别？
+
+表面上来看，二者都是为了让智能体调用工具。但实际上，在抽象层面、复用能力和工程化复杂度上有着很大差异。
+
+MCP 通过清晰的 **Client–Server 分层架构** 解决了传统 Function Call 的“强耦合、难扩展、难管理”问题。工具不再需要嵌入到智能体内部，而是以独立的 MCP Server 暴露能力；Client 负责通过 JSON-RPC 与 Server 进行能力协商与通信；智能体则统一管理权限、上下文整合与大模型的调用。这样一来，工具接入不再需要在智能体中硬编码逻辑，功能边界更清晰，智能体也能通过工具的组合与复用轻松扩展。
+
+Function Call是“**智能体带着自制的工具去工作**”，MCP通过一整套标准协议和架构，将工具变成了独立的Server，由Agent统一调度。智能体只需要按照协议调用和查询即可。
+
+#### MCP的工作流程
+
+![image-20260323214936034](images/LLMentor/image-20260323214936034.png)
+
+1. 初始化（工具说明获取）：Agent初始化的时候会通过MCP协议向所有连接的MCP Server使用**JSON-RPC**协议请求工具说明书。MCP Server负责提供并确保这些说明书是标准的JSON格式
+2. 决策（大模型规划）：Agent将用户的原始输入和MCP提供的说明一并发送给大模型。大模型根据这些信息进行规划，并返回一个清晰的**工具调用指令**
+3. 调用（执行和结果回传）：智能体接收到指令后，通过MCP 协议请求对应的MCP Server执行工具操作。MCP Server完成实际的工具逻辑，并将原始执行结果返回给智能体。
+4. 总结（生成最终回复）：Agent将用户原始问题和工具执行结果一同发送到大模型。大模型根据结果进行总结，生成自然回复。
+
+### MCP技术原理
+
+
+
+### 使用 Spring AI 开发MCP Server
+
+#### Stdio
+
+Stdio通过标准的输入输出与客户端通信，服务器启动之后直接在控制台读写JSON-RPC消息，适合本地轻量化部署、没有网络条件下使用，要求控制台干干净净，毕竟是按照输入输出进行消息处理的。
+
+```xml
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+        </dependency>
+```
+
+如果是需要流式输出的，需要使用以下依赖，同时注意不能和上述的依赖混用。
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
+</dependency>
+```
+
+为了满足控制台干干净净，我们必须要在配置文件中将banner、日志全部关闭。
+
+```yaml
+server:
+  port: 8000
+
+spring:
+  main:
+    web-application-type: none
+    banner-mode: off
+
+  ai:
+    mcp:
+      server:
+        name: mcp-server
+        version: 1.0.0
+        stdio: true
+        enabled: true
+        type: SYNC
+
+logging:
+  level:
+    root: OFF
+```
+
+代码中进行编写：**WeatherService（天气服务工具）**
+
+```java
+@Service
+public class WeatherService {
+    @Tool(description = "根据城市名称查询天气信息")
+    public String getWeather(String city) {
+        if (city == null) {
+            return "请提供城市名称";
+        }
+
+        return switch(city) {
+            case "北京" -> "北京：晴，25℃";
+            case "上海" -> "上海：多云，28℃";
+            case "广州" -> "广州：阴，23℃";
+            case "深圳" -> "深圳：雷阵雨，21℃";
+            default -> city + "：雷雨， 19℃";
+        };
+    }
+}
+```
+
+MCP 注入到ToolCallbackProvider中：
+
+```java
+@Bean
+    public ToolCallbackProvider weatherTools(WeatherService weatherService) {
+        // 自动扫描 @Tool 注解
+        return MethodToolCallbackProvider.builder().toolObjects(weatherService).build();
+    }
+```
+
+之后打成Jar包，在CLINE中配置相关的MCP：
+
+```json
+{
+  "mcpServers": {
+    "weather-stdio": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "java",
+      "args": [
+        "-jar",
+        "/Users/a1234/github_repository/LLMentor-myself-github/LLMentor/mcp/mcp-server-stdio/target/mcp-server-stdio-0.0.1-SNAPSHOT.jar"
+      ]
+    }
+  }
+}
+```
+
+之后便可以使用MCP了：如图：
+
+![image-20260323232349184](images/LLMentor/image-20260323232349184.png)
+
+#### SSE
+
+配置文件
+
+```yaml
+server:
+  port: 8003
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+      enabled: true
+
+spring:
+  application:
+    name: mcp-weather-sse
+
+  ai:
+    mcp:
+      server:
+        enabled: true
+        name: weather-sse-server
+        version: 1.0.0
+        type: SYNC
+        capabilities:
+          tool: true
+          resource: false
+          prompt: false
+          completion: false
+        sse-message-endpoint: /mcp/messages     #客户端向 MCP Server 发送指令（“写信”）
+        sse-endpoint: /sse    #客户端订阅服务端的消息（“收信”）
+```
+
+其他的和Stdio一致。
+
+我们在浏览器中（服务端）打开长连接：`http://localhost:8003/sse`
+
+![image-20260323233720846](images/LLMentor/image-20260323233720846.png)
+
+使用ApiFox进行测试：`http://localhost:8003/mcp/messages?sessionId=e11c95bc-9cfa-4aaf-8b36-abc0563d4559`
+
+请求体中我们先进行初始化：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "roots": {
+        "listChanged": true
+      },
+      "sampling": {},
+      "elicitation": {}
+    },
+    "clientInfo": {
+      "name": "ExampleClient",
+      "title": "Example Client Display Name",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+观察浏览器变化：
+
+![image-20260323233833926](images/LLMentor/image-20260323233833926.png)
+
+之后客户端必须向服务端发送：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized"
+}
+```
+
+表示已经INIT了。
+
+之后客户端发送获取工具说明书的步骤请求：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "params": {},
+  "id": 100
+}
+```
+
+查看服务端输出：
+
+![image-20260323234124578](images/LLMentor/image-20260323234124578.png)
+
+之后就是工具调用执行了：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "getWeather",
+    "arguments": {
+      "city": "广州"
+    }
+  },
+  "id": 101
+}
+```
+
+其中的name是和服务端的`getWeather`保持一致。
+
+查看结果：
+
+![image-20260323234304814](images/LLMentor/image-20260323234304814.png)
+
+#### Streamable HTTP
+
+Streamable HTTP是为了改进传统的SSE在长连接中可能出现的问题而生的。通过单一**HTTP端点**实现请求的发送和流式响应接收，支持断点重传和确认消息重发，保证长时间任务或增量任务的稳定可靠。
+
+配置文件：
+
+```yaml
+server:
+  port: 8004
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+      enabled: true
+    context-path: /stream/test
+
+spring:
+  application:
+    name: mcp-weather-streamable
+
+  ai:
+    mcp:
+      server:
+        protocol: streamable  # stateless 表示无状态
+        name: streamable-mcp-server
+        version: 1.0.0
+        type: SYNC
+        instructions: "这个服务是用来查询天气信息的"
+        resource-change-notification: true
+        tool-change-notification: true
+        prompt-change-notification: true
+        annotation-scanner:
+          enabled: true
+        streamable-http:
+          mcp-endpoint: /api/mcp
+          keep-alive-interval: 30s
+```
+
+其他的工具一类的还是一样的代码。
+
+还是使用ApiFox来测试接口通不通。
+
+地址：http://localhost:8004/stream/test/api/mcp
+
+初始化参数：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "roots": {
+        "listChanged": true
+      },
+      "sampling": {},
+      "elicitation": {}
+    },
+    "clientInfo": {
+      "name": "ExampleClient",
+      "title": "Example Client Display Name",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+返回结果：![image-20260324000550075](images/LLMentor/image-20260324000550075.png)
+
+还是上述的 那一些参数
+
+![image-20260324000914763](images/LLMentor/image-20260324000914763.png)
+
+
+
+
+
+![image-20260324000950408](images/LLMentor/image-20260324000950408.png)
+
+我们在Cline中试试能不能用到这个MCP Server？
+
+![image-20260324001126337](images/LLMentor/image-20260324001126337.png)
+
+![image-20260324001203944](images/LLMentor/image-20260324001203944.png)
+
+可以正常使用。
+
+
+
+
+
+
+
+
+
