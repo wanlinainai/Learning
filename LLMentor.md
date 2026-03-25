@@ -2082,6 +2082,316 @@ spring:
 
 可以正常使用。
 
+### 使用Spring AI 开发MCP Client
+
+引入包：
+
+```xml
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+```
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-client-webflux</artifactId>
+</dependency>
+```
+
+一种是基于配置文件自动注入，另一种是手动创建。
+
+#### 自动注入
+
+修改我们的配置文件：
+
+```yaml
+server:
+  port: 8001
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+      enabled: true
+
+spring:
+  application:
+    name: MCP_Client
+  ai:
+    openai:
+      api-key: @dashscope.api.key@
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.7
+          max-tokens: 5000
+    mcp:
+      client:
+        enabled: true
+        name: my-mcp-client
+        version: 1.0.0
+        request-timeout: 60s
+        type: sync
+#        stdio:
+#          connections:
+#            weather-stdio:
+#              command: java
+#              args:
+#                - -jar
+#                - "/Users/a1234/github_repository/LLMentor-myself-github/LLMentor/mcp/mcp-server-stdio/target/mcp-server-stdio-0.0.1-SNAPSHOT.jar"
+#          servers-configuration: classpath:/mcp-servers.json
+
+        sse:
+          connections:
+            weather-sse:
+              url: http://localhost:8003
+              sse-endpoint: sse
+
+#        streamable-http:
+#          connections:
+#            weather-streamable:
+#              url: http://localhost:8004/stream/test
+#              endpoint: api/mcp
+```
+
+#### McpSyncClient调用
+
+我们上述配置文件中配置的MCP Server都会被自动注入到`List<McpSyncClient>`中，也就是说这个List包含了我们所有在配置文件注册的MCP Server。
+
+```java
+@Service
+@Slf4j
+public class McpClientService {
+
+    @Autowired
+    private List<McpSyncClient> mcpSyncClients;
+
+    public McpSchema.CallToolResult callTool(String type) {
+        String toolName = "getWeather";
+
+        Map<String, Object> param = new HashMap<>();
+        param.put("city", "上海");
+
+        for (McpSyncClient client : mcpSyncClients) {
+            McpSchema.Implementation clientInfo = client.getClientInfo();
+            McpSchema.Implementation serverInfo = client.getServerInfo();
+
+            log.info("clientInfo: {}", JSON.toJSONString(clientInfo));
+            log.info("serverInfo: {}", JSON.toJSONString(serverInfo));
+
+            try {
+                if (clientInfo.title().contains(type)) {
+                    log.info("开始调用MCP服务");
+                    McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder().name(toolName).arguments(param).build();
+                    McpSchema.CallToolResult result = client.callTool(request);
+                    log.info("callTool result: {}", result);
+
+                    return result;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            log.info("================================================");
+        }
+
+        return null;
+    }
+}
+```
+
+访问接口效果：
+
+![image-20260325220338680](images/LLMentor/image-20260325220338680.png)
+
+#### ChatClient调用
+
+我们将SyncMcpToolCallbackProvider注入到ChatClient中，即可实现智能体对MCP Server的接入。
+
+```java
+    @Autowired
+    private OpenAiChatModel chatModel;
+
+    @Autowired
+    private SyncMcpToolCallbackProvider toolCallbackProvider;
+
+    private ChatClient chatClient;
+
+    @PostConstruct
+    public void init() {
+        ToolCallback[] toolCallbacks = toolCallbackProvider.getToolCallbacks();
+        this.chatClient = ChatClient.builder(chatModel)
+                .defaultToolCallbacks(toolCallbacks)
+                .build();
+    }
+
+    public String chat(String userMessage) {
+        return chatClient.prompt()
+                .user(userMessage)
+                .call()
+                .content();
+    }
+```
+
+![image-20260325220812511](images/LLMentor/image-20260325220812511.png)
+
+### SSE 模式下MCP Server如何重连
+
+SSE相较于Streamable肯定是不够方便的，但是早期的项目MCP都是依赖这个SSE来进行传输的，问题就是：**它对于长连接的依赖性非常强，一旦出现网络波动，服务端重启、代理回收的话SSE就会立即断开。**
+
+Spring AI MCP Client 没有提供自动重连的能力，一旦SSE被中断，客户端就会失去与MCP Server的指令通道，工具虽然注册，但是不会响应任何内容，整个系统陷入假死状态。
+
+要解决的话其实也是很简单，核心就是为SSE模式增加一层弹性的连接管理机制，客户端可以自动检测SSE中断，并主动重新发起连接请求，重新初始化会话和工具注册的流程。
+
+```java
+@Service
+@Slf4j
+public class RetrySSEMcpService {
+
+    private McpSyncClient mcpClient;
+
+    private ChatClient chatClient;
+
+    private final AtomicBoolean retrying = new AtomicBoolean(false);
+
+    // initialize 重试线程
+    private final ExecutorService retryExecutor = Executors.newSingleThreadExecutor();
+
+    @Autowired
+    private OpenAiChatModel chatModel;
+
+    @PostConstruct
+    public void init() {
+      log.info("Initializing SSE MCP Client...");
+
+      // 构建SSEClient
+        this.mcpClient = buildSSEClient();
+        // 初始化 Client
+        try {
+            this.mcpClient.initialize();
+            log.info("SSE MCP Client initialized");
+        } catch (Exception e) {
+            log.error("Initial SSE initialize failed, will reply on retry thread.", e);
+            // 重试
+            startRetryInitialize();
+        }
+
+        // 初始化Toolcallback
+        SyncMcpToolCallbackProvider provider = SyncMcpToolCallbackProvider.builder()
+                .mcpClients(List.of(this.mcpClient))
+                .build();
+
+        ToolCallback[] toolCallbacks = provider.getToolCallbacks();
+        this.chatClient = ChatClient.builder(chatModel)
+                // 执行工具回调
+                .defaultToolCallbacks(toolCallbacks)
+                // 默认工具
+                .defaultTools()
+                .build();
+    }
+
+    private McpSyncClient buildSSEClient() {
+
+        HttpClientSseClientTransport transport = HttpClientSseClientTransport.builder("http://localhost:8003")
+                .sseEndpoint("/sse")
+                .build();
+
+        return McpClient.sync(transport)
+                .clientInfo(new McpSchema.Implementation("sse-client", "1.0"))
+                .requestTimeout(Duration.ofSeconds(10))
+                .build();
+    }
+
+    /**
+     * 定时任务重试，5S一次
+     */
+    @Scheduled(fixedDelayString = "5000")
+    public void pingSSE() {
+        log.info("SSE Ping ....");
+        if (this.mcpClient == null) {
+            log.warn("SSE 没有初始化...");
+            startRetryInitialize();
+            return;
+        }
+
+        try {
+            this.mcpClient.ping();
+            log.debug("SSE MCP ping OK......");
+        } catch (Exception e) {
+            log.error("SSE MCP ping failed :{}", e.getMessage());
+            startRetryInitialize();
+        }
+    }
+
+    /**
+     * 启动重试的线程
+     */
+    private void startRetryInitialize() {
+        if (!retrying.compareAndSet(false, true)){
+            return;
+        }
+        retryExecutor.submit(() -> {
+            log.warn("Start retrying SSE MCP 初始化....");
+
+            while (true) {
+                try {
+                    this.mcpClient = buildSSEClient();
+                    this.mcpClient.initialize();
+
+                    log.info("SSE MCP re-initialized successfully..");
+
+                    SyncMcpToolCallbackProvider provider = SyncMcpToolCallbackProvider.builder()
+                            .mcpClients(List.of(this.mcpClient))
+                            .build();
+
+                    ToolCallback[] callbacks = provider.getToolCallbacks();
+                    this.chatClient = ChatClient.builder(chatModel)
+                            .defaultToolCallbacks(callbacks)
+                            .defaultTools()
+                            .build();
+
+                    retrying.set(false);
+                    return;
+                } catch (Exception e) {
+                    log.warn("重试失败，10S之后重新尝试", e.getMessage());
+                }
+
+                try {
+                    Thread.sleep(10000);
+                } catch (Exception e) {
+                    throw new RuntimeException("失败了");
+                }
+            }
+        });
+    }
+
+    public String chat(String query) {
+        return chatClient.
+                prompt()
+                .user(query)
+                .call().content();
+    }
+}
+```
+
+最核心的方法其实就是Spring AI提供的一个`ping`方法，我们可以设置5S一次的Ping 服务端的时间，如果出现问题的话就重试。
+
+访问URL：`http://localhost:8001/mcp/retryChat?query=%E4%BB%8A%E5%A4%A9%E4%B8%8A%E6%B5%B7%E7%9A%84%E5%A4%A9%E6%B0%94%E6%80%8E%E4%B9%88%E6%A0%B7%EF%BC%9F`
+
+最终结果：
+
+![image-20260325230953327](images/LLMentor/image-20260325230953327.png)
+
+即使断开也可以重新连接。
+
+
+
+
+
+
+
 
 
 
