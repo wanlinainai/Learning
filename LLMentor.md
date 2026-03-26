@@ -2386,6 +2386,194 @@ public class RetrySSEMcpService {
 
 即使断开也可以重新连接。
 
+### MCP 调试工具
+
+本地安装Node环境之后：
+
+```shell
+npx @modelcontextprotocol/inspector@latest
+```
+
+![image-20260326212730396](images/LLMentor/image-20260326212730396.png)
+
+**streamable HTTP**
+
+URL中输入：http://127.0.0.1:8004/stream/test/api/mcp
+
+![image-20260326212809903](images/LLMentor/image-20260326212809903.png)
+
+**SSE**
+
+URL 中 输入：http://localhost:8003/test/sse
+
+**Stdio**
+
+配置好：
+
+```shell
+java -jar ****.jar
+```
+
+即可。
+
+### 跳过MCP模型总结
+
+
+
+在MCP实现原理章节中我们已经知道了MCP的内部工作流程。**大模型决策工具，工具调用执行完成之后将结果再次丢给大模型生成新的结果迭代总结**。
+
+#### 为什么要跳过总结？
+
+##### 多智能体协作
+
+![image-20260326214009065](images/LLMentor/image-20260326214009065.png)
+
+上图指的是多Agent的执行流程。
+
+多个Agent持续调用工具、互相传递结果，如果每一步都需要模型总结的话，成本其实是相当高的。
+
+- 延迟倍增
+- Token消耗大
+- 智能体的链路变长、变慢
+- 用户等待的时间变长
+
+##### 工具本身执行的输出就是最终答案
+
+例如很多查询类型的MCP：
+
+- 天气预报
+- 支付下单
+- 查询订单
+- 文件上传
+- 等等
+
+这一些工具返回的通常是工具执行之后的一个格式化的数据，我们开发过程中可以使用到这些格式化之后的数据转成Bean或者其他我们需要的格式类型。大模型总结之后的结果很可能会将数据变化，最终得到的不是我们的结果，同时延迟、Token都会增加。
+
+#### ReturnDirect
+
+Spring AI提供了一个参数，**returnDirect**
+
+```java
+@Service
+@Slf4j
+public class WeatherService {
+    @Tool(name = "getWeather", description = "根据城市名称查询天气信息", returnDirect = true)
+    public String getWeather(String city) {
+        if (city == null) {
+            return "请提供城市名称";
+        }
+
+        return switch(city) {
+            case "北京" -> "北京：晴，25℃";
+            case "上海" -> "上海：多云，28℃";
+            case "广州" -> "广州：阴，23℃";
+            case "深圳" -> "深圳：雷阵雨，21℃";
+            default -> city + "：雷雨， 19℃";
+        };
+    }
+}
+```
+
+调用即结果如下：
+
+![image-20260326221036732](images/LLMentor/image-20260326221036732.png)
+
+屌用没有，我们已经设置了returnDirect，。
+
+定位源码最终是`SyncMcpToolCallback`类没有实现returnDirect属性，而这个属性默认是false的。
+
+但是`FunctionToolCallback`类重写了这个属性，但是如果使用Function call的方式的话就意味着没有办法使用MCP远程调用了。
+
+实现方式就是将`defaultToolCallbacks`换成`defaultTools`。
+
+```java
+        this.chatClient = ChatClient.builder(chatModel)
+//                .defaultToolCallbacks(toolCallbacks)
+                .defaultTools(new WeatherService())
+                .build();
+```
+
+再次请求发现：![image-20260326222342032](images/LLMentor/image-20260326222342032.png)
+
+没问题了。
+
+
+
+如果我们需要使用这个可以跳过总结的功能，很明显需要我们自己手写一个类继承自`SyncMcpToolCallbackProvider`，在provider的toolCallback中添加的`SyncMcpToolCallback`。
+
+```java
+@Slf4j
+public class ReturnDirectMcpToolCallbackProvider extends SyncMcpToolCallbackProvider {
+
+    private final List<McpSyncClient> mcpSyncClients;
+
+    private boolean returnDirect;
+
+    public ReturnDirectMcpToolCallbackProvider(List<McpSyncClient> mcpSyncClients, boolean returnDirect) {
+        super(mcpSyncClients);
+        this.mcpSyncClients = mcpSyncClients;
+        this.returnDirect = returnDirect;
+    }
+
+    @Override
+    public ToolCallback[] getToolCallbacks() {
+        var toolCallbacks = new ArrayList<>();
+        for (McpSyncClient mcpClient : mcpSyncClients) {
+            List<McpSchema.Tool> toolList = Collections.emptyList();
+
+            toolList = mcpClient.listTools().tools();
+
+            for (McpSchema.Tool tool : toolList) {
+                toolCallbacks.add(new ReturnDirectSyncMcpToolCallback(mcpClient, tool, returnDirect));
+            }
+        }
+
+        var array = toolCallbacks.toArray(new ToolCallback[0]);
+        validateToolCallbacks(array);
+        return array;
+    }
+
+    private void validateToolCallbacks(ToolCallback[] toolCallbacks) {
+        List<String> duplicateToolNames = ToolUtils.getDuplicateToolNames(toolCallbacks);
+        if (!duplicateToolNames.isEmpty()) {
+            throw new IllegalStateException(
+                    "Multiple tools with the same name (%s)".formatted(String.join(", ", duplicateToolNames)));
+        }
+    }
+}
+```
+
+
+
+```java
+public class ReturnDirectSyncMcpToolCallback extends SyncMcpToolCallback {
+
+    private final boolean returnDirect;
+    public ReturnDirectSyncMcpToolCallback(McpSyncClient mcpClient, McpSchema.Tool tool, boolean returnDirect) {
+        super(mcpClient, tool);
+        this.returnDirect = returnDirect;
+    }
+
+    @Override
+    public ToolMetadata getToolMetadata() {
+        return ToolMetadata.builder()
+                .returnDirect(returnDirect)
+                .build();
+    }
+}
+```
+
+在调用的地方修改：
+
+```java
+        ReturnDirectMcpToolCallbackProvider provider = new ReturnDirectMcpToolCallbackProvider(clients, true);
+        ToolCallback[] toolCallbacks = provider.getToolCallbacks();
+```
+
+创建provoder的时候使用我们自定义的`provider`。
+
+![image-20260326224759731](images/LLMentor/image-20260326224759731.png)
+
 
 
 
