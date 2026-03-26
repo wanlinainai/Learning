@@ -2576,9 +2576,36 @@ public class ReturnDirectSyncMcpToolCallback extends SyncMcpToolCallback {
 
 
 
+### MCP 实现工具过滤
 
+MCP Server中通常会存在大量的工具，如果不加以区分很明显会存在性能和准确性的问题。
 
+- **降低上下文压力和Token成本**
+- **提升模型工具选择的准确性**
+- **多智能体角色划分**
 
+真实在使用的过程中直接在创建Provider的时候加上一个条件：`toolFilter((conn, tool) -> tool.name().startsWith("goods"))`
+
+```java
+SyncMcpToolCallbackProvider provider = SyncMcpToolCallbackProvider.builder()
+                .mcpClients(clients)
+                .toolFilter((conn, tool) -> tool.name().startsWith("goods"))
+                .build();
+```
+
+Server端在设计Tool的时候就可以在@Tool中加上name属性。
+
+原理是怎么样的呢？`SyncMcpToolCallbackProvider`类中。
+
+![image-20260326233745400](images/LLMentor/image-20260326233745400.png)
+
+![image-20260326233841559](images/LLMentor/image-20260326233841559.png)
+
+> test方法是接收两个参数：T和U，返回一个Boolean值，判断两个参数是否满足某一个条件。
+>
+> 两个参数分别是什么呢？第一个是指的Server端的连接信息，第二个就是连接的工具本身。
+>
+> 对每一个工具进行判断，返回true表示“保留该工具”、false表示“丢弃这个工具”。
 
 
 
