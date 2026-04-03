@@ -1,5 +1,27 @@
 # LLMentor（2）RAG
 
+## RAG
+
+### 主要流程
+
+主要分成了两步，一步是构建索引，第二步是检索生成。
+
+第一步索引构建步骤是：在处理索引构建的时候需要注意一个原则：Garbage in, Garbage out（GIGO）。垃圾进垃圾出。由此可见原始数据准确度的正确性。
+
+**原始数据** --预处理--> **文本块** --向量化--> **向量模型** --存储--> **向量数据库**
+
+第二步是检索生成，步骤是：
+
+**用户提问** ----> **提示词** ----> **向量模型** ----> **向量数据库**
+
+​                |
+
+​                |
+
+​				大模型 -----> 生成相关回答
+
+用户提问的时候，根据用户的提示词实时处理用户的问题。首先需要从知识库中匹配出与用户问题相关的**最相似文本块(chunk)**。
+
 ## RAG-索引构建
 
 索引构建的开始是：文档
@@ -122,5 +144,132 @@ matadata：元数据。检索的时候可以进行精确的过滤、分组或追
 
 除此之外，RAG中的Metadata也可以在此处体现真正的作用，比如我们在metadata中设计了文件名、参考链接等，那么这边的大模型在生成答案的时候，在回答中就可以附带引用来源和参考链接，提升回答的可信度。
 
+## LlamaIndex 构建 RAG
 
+- 数据索引的构建：支持各种格式的数据（PDF、word等）转成LLM可理解的索引结构。
+- 高效检索：
+- 与LLM无缝集成
+- 支持多种数据源格式
+- 模块化可扩展
+
+解决了LLM的幻觉问题、打通了私有数据与通用LLM、简化RAg的架构开发。
+
+### 使用UV构建一个简单的RAG
+
+```shell
+uv init llamaindex_test
+cd llamaindex_test
+uv venv
+source .venv/bin/activate
+```
+
+```python
+from  llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+from llama_index.embeddings.dashscope import DashScopeEmbedding
+from llama_index.llms.dashscope import DashScope
+import os
+
+DASHSCOPE_API_KEY = "sk-*****"
+
+# 1. 加载文档（）
+documents = SimpleDirectoryReader("data").load_data()
+
+# 2. 设置向量模型
+embedding_model = DashScopeEmbedding(model_name="text-embedding-v2",api_key=DASHSCOPE_API_KEY)
+
+# 3. 设置LLM
+llm = DashScope(model_name="qwen-max", temperature=0.1, api_key=DASHSCOPE_API_KEY)
+
+# 4 构建索引
+index = VectorStoreIndex.from_documents(documents, embed_model=embedding_model)
+
+# 5 创建查询引擎
+query_engine = index.as_query_engine(llm=llm)
+
+response = query_engine.query("请分析一下这篇文档的主要内容")
+print(response)
+
+def main():
+    print("Hello from llamaindex-test!")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+需要添加uv相关依赖。
+
+```shell
+uv add llama-index llama-index-llms-dashscope llama-index-embeddings-dashscope
+```
+
+执行代码：
+
+![image-20260403134642919](LLMentor（2）RAG/image-20260403134642919.png)
+
+### 问题
+
+尽管实现了一个简单的RAG，但是如果想要在生产环境中使用的话还需要考虑更多的因素：
+
+- chunking 分块的策略优化
+- 使用持久化向量数据库
+- 查询优化
+- 文件检索优化
+- 对话记忆
+- 重排序
+- 混合检索
+- 多模态
+- RAG效果评估
+
+## 文档预处理
+
+预处理的目标是让后续的分片和向量化能够在干净的数据上进行，从源头保证知识库索引的质量。
+
+主要包含了两个步骤：**文档读取**和**数据清洗**。
+
+文档读取就是将不同格式的文档处理成统一的标准化的可供解析的格式。Spring AI已经存在了一个DocumentReader接口。统一的接口，其中存在多种实现。
+
+- TextReader（TXT）
+- JsonReader（JSON）
+- PagePdfDocumentReader/ ParagraphPdfDocumentReader（PDF格式）
+- MarkdownDocumentReader（Markdown）
+- JsoupDocumentReader（HTML）
+- TikaDocumentReader（几乎通用）
+
+代码文件参考：[github](https://github.com/wanlinainai/LLMentor/tree/main/rag/src/main/java/com/zxh/llm/llmentor/rag/reader)
+
+上述的方式已经能够成功读取到文件，但是数据可能存在干扰，需要数据清洗。将多余的空格、换行符号、无意义的特殊符号和重复内容进行处理。
+
+```java
+    public List<Document> cleanDocuments(List<Document> documents) {
+        if (CollectionUtils.isEmpty(documents)) {
+            return documents;
+        }
+        return documents.stream().map(doc -> {
+            if (doc == null || doc.getText() == null) {
+                return doc;
+            }
+            String text = doc.getText();
+            text = text.replaceAll("\\s+"," ").trim();
+
+            // 去除无意义的乱码
+            text = text.replaceAll("[^\\p{L}\\p{N}\\p{P}\\p{Z}\\n]", "");
+            
+            text = text.toLowerCase();
+
+            String[] paragraphs = text.split("\\n+");
+            HashSet<String> seen = new LinkedHashSet<>();
+            for (String paragraph : paragraphs) {
+                String trimmed = paragraph.trim();
+                if (!seen.isEmpty()) {
+                    seen.add(trimmed);
+                }
+            }
+            
+            text = String.join("\n", seen);
+            return new Document(text);
+        })
+                .collect(Collectors.toList());
+    }
+```
 
