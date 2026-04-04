@@ -469,7 +469,156 @@ public class OverlapParagraphTextSplitter extends TextSplitter {
 
 发现分成了6段chunk。
 
+### 父子分片
 
+父子分片通过将大块文本作为父文本保留上下文，切分成多个子块用来检索，兼顾两者的优势。
+
+- 小分片：句子或者段落，语义粒度细，精确匹配用户查询，缺少足够的上下文，导致生成的时候信息不够完整。
+- 大分片：整段或者整个章节。生成高质量回答，但是可能导致“信号稀释”的问题。
+
+检索阶段使用**子块**进行向量匹配，提高与用户查询的语义对齐度。生成阶段返回对应的**父块**作为LLM的输入，确保模型拥有足够背景信息生成准确、连贯的回答。
+
+
+
+- embedding模型是有token限制的。如text-embedding-v4这个模型的限制大小是8192
+
+![image-20260404200049468](images/LLMentor（2）RAG/image-20260404200049468.png)
+
+如果一个分片长度超过这个Token数量的话会出现没有办法存储到向量库的。也就意味着不管是什么方式的embedding，都需要支持一个chunkSize字段，保证模型本身不支持处理的情况。
+
+- 切分之后语义会丢失
+
+按照上述的方法的话一定会出现语义拆开的问题。同一句话出现在两个分片中。
+
+有一种方式的话就是通过overlap，做点冗余和重叠。
+
+但是这种的话对于图片和表格一类的是有问题的，没有办法做overlap。
+
+为了满足小文本块的嵌入和检索，又能满足大文本块的完整性召回。那就是父子分块了。
+
+**文档分片阶段**
+
+将原始的文本存到对象数据库中，有一个句子：`我是一个完整的句子`。按照overlap = 5来拆分的话，就会出现`我是一个完`、`整的句子`。
+
+按照上述的说法来看：
+
+- `我是一个完整的句子`， id = 5   ----> MySQL
+- `我是一个完`，parentChunkId = 5 ---->  pgvector（代指PG的向量库）
+- `整的句子`，parentChunkId = 5  ---->  pgvector
+
+我们需要在两个子chunk中的metadata记录一下(parentChunkId = 5)。当前分片是一个分片，以及它对应的分片的ID。
+
+只有子分片做了索引构建，保存到了向量数据库中，所以在语义相似度召回的时候只通过子分片召回。
+
+召回之后，我们判断这个分片是不是子分片，如果是的话取出父分片id，去关系型数据库中查询父分片，替换成子分片的内容，交给LLM做资料参考。
+
+## 向量模型
+
+### 向量模型
+
+Spring AI 提供了EmbeddingModel接口，用于提供给各个厂商的离线向量模型快速接入。同时也可以使用一些在线的向量模型。
+
+#### DashScopeEmbeddingModel
+
+DashScopeEmbeddingModel是阿里云百炼平台的一个embeddingModel的实现方式，在我们的Spring 中会默认有这个Bean，可以直接用。
+
+```yaml
+spring:
+  ai:
+    dashscope:
+      embedding:
+        options:
+          model: text-embedding-v4
+          dimensions: 768
+```
+
+#### 定义EmbeddingService
+
+```java
+@Service
+public class EmbeddingService {
+
+    @Autowired
+    private EmbeddingModel embeddingModel;
+
+    @Autowired
+    private VectorStore vectorStore;
+
+    /**
+     * 向量化
+     */
+    public List<float[]> embed(List<Document> documents) {
+        return documents.stream().map(document -> embeddingModel.embed(document.getText()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 向量化并存储向量库
+     */
+    public void embedAndStore(List<Document> documents) {
+        List<List<Document>> batches = new ArrayList<>();
+        for (int i = 0; i < documents.size(); i += 9) {
+            batches.add(documents.subList(i, Math.min(i + 9, documents.size())));
+        }
+
+        for (List<Document> batch : batches) {
+            vectorStore.add(batch);
+        }
+    }
+}
+```
+
+两个方法：`embed`和`embedAndStore`。
+
+使用的PGVectorStore。
+
+不同的embedding模型都会有批次大小的限制。
+
+所以我们在做`embedAndStore`操作的时候，一次处理9个Document。
+
+如果在yml中设置`max-document-batch-size`的话控制不了大小的。
+
+#### 向量存储
+
+```java
+    @RequestMapping("/embed")
+    public String embed(String filePath) {
+        List<Document> documents;
+        try {
+            documents = documentReaderFactory.read(new File(filePath));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        List<Document> allChunkedDocuments = documents.stream()
+                .flatMap(document -> {
+                    RecursiveCharacterTextSplitter splitter = new RecursiveCharacterTextSplitter(300, new String[]{"\n\n", "\n"});
+                    return splitter.split(document).stream();
+                })
+                .collect(Collectors.toList());
+
+        embeddingService.embedAndStore(allChunkedDocuments);
+        return "success";
+    }
+```
+
+经过VectorStore向量化 + 存储这两个步骤，我们可以打开向量数据库查看一下，就会发现：
+
+![image-20260404203907988](images/LLMentor（2）RAG/image-20260404203907988.png)
+
+其中存在几个字段：`id`、`content`、`metadata`和`embedding`四个字段。
+
+### 向量模型怎么选择呢
+
+一般就是从部署复杂度、检索性能、可扩展、方便集成、社区活跃度几个方面来评估。
+
+- PGVector：是一个PGSQL的扩展，只需要在PGSQL上执行CREATE EXTENSION vector。
+- Chroma：轻量向量数据库。
+- Milvus：数据量大、分布式系统需要部署。
+- ES：关键词 + 混合检索
+
+没有最好的只有最合适的。
+
+## 检索增强生成
 
 
 
