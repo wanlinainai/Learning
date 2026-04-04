@@ -275,7 +275,199 @@ uv add llama-index llama-index-llms-dashscope llama-index-embeddings-dashscope
 
 ## 常见的文档分片方式
 
+由于大语言模型的上下文窗口限制，意味着我们不能将整篇文章送入到大模型进行解析处理。在**RAG**中，我们需要将文档拆分成很多的小文本块，到检索生成的环节的时候，检索的就是与用户问题最相似的一部分小文本块。
 
+主要就是几种方式：（只是参考方式）
+
+- 固定大小分片
+- 递归分片
+- 基于文档的分片
+- 语义分片
+- 基于LLM分片
+
+具体的分割出来的语义是如何的，可以参考网站：https://www.chunkviz.com/
+
+### 代码实现
+
+我们基于本地的一个PDF文件来做文档的分片：![image-20260404172701104](images/LLMentor（2）RAG/image-20260404172701104.png)
+
+#### 基于Overlap的文档的切割
+
+Spring AI 中的文档切割是不带有 overlap 属性的。也就意味着所有的语句没有重叠。我们基于overlap来自定义实现一个文档的切割器。
+
+```java
+public class OverlapParagraphTextSplitter extends TextSplitter {
+    
+    protected final int chunkSize;
+    
+    protected final int overlap;
+    
+    public OverlapParagraphTextSplitter(int chunkSize, int overlap) {
+        if (chunkSize < 0) {
+            throw new IllegalArgumentException("Chunk size not allowed null");
+        }
+        if (overlap < 0) {
+            throw new IllegalArgumentException("overlap not allowed negative number");
+        }
+        
+        if (overlap > chunkSize) {
+            throw new IllegalArgumentException("overlap not allowed gt chunkSize");
+        }
+        this.chunkSize = chunkSize;
+        this.overlap = overlap;
+    }
+    
+    @Override
+    protected List<String> splitText(String text) {
+        if (StringUtils.isBlank(text)) return Collections.emptyList();
+
+        // 遇到换行 1个或者多个就拆开
+        String[] paragraphs = text.split("\\n+");
+        List<String> allChunks = new ArrayList<>();
+        StringBuilder currentChunk = new StringBuilder();
+
+        for (String paragraph : paragraphs) {
+            if (StringUtils.isBlank(paragraph)) continue;
+            int start = 0;
+            while (start < paragraph.length()) {
+                int remainingSpace = chunkSize - currentChunk.length();
+                int end = Math.min(start + remainingSpace, paragraph.length());
+                
+                currentChunk.append(paragraph, start, end);
+                
+                if (currentChunk.length() >= chunkSize) {
+                    allChunks.add(currentChunk.toString());
+                    
+                    // 计算重叠的值
+                    String overlapText = "";
+                    if (overlap > 0) {
+                        int overlapStart = Math.max(0, currentChunk.length() - overlap);
+                        overlapText = currentChunk.substring(overlapStart);
+                    }
+                    
+                    currentChunk = new StringBuilder();
+                    if (!overlapText.isEmpty()) {
+                        currentChunk.append(overlapText);
+                    }
+                }
+                
+                start = end;
+            }
+        }
+        if (currentChunk.length() > 0) {
+            allChunks.add(currentChunk.toString());
+        }
+        return allChunks;
+    }
+}
+```
+
+之后在设置chunkSize和overlap的时候传入100、5.看看效果。
+
+```java
+    @RequestMapping("/split")
+    public String split(String filePath) {
+        List<Document> documents;
+        try {
+            List<Document> read = documentReaderFactory.read(new File(filePath));
+            documents = DocumentCleaner.cleanDocuments(read);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        for (Document document : documents) {
+            System.out.println("before splitter:" + document.getText());
+            System.out.println("");
+            OverlapParagraphTextSplitter splitter = new OverlapParagraphTextSplitter(100, 5);
+
+            List<Document> chunkedDocuments = splitter.split(document);
+            for (Document chunkedDocument : chunkedDocuments) {
+                System.out.println("after chunk:" + chunkedDocument.getText());
+                System.out.println("");
+            }
+
+            System.out.println("==============================");
+        }
+        return "success";
+    }
+```
+
+使用postman来测试这个接口。
+
+![image-20260404173326512](images/LLMentor（2）RAG/image-20260404173326512.png)
+
+![image-20260404173410438](images/LLMentor（2）RAG/image-20260404173410438.png)
+
+看到文本中的拆分是存在公共部分的。
+
+#### 基于递归进行拆分
+
+```java
+    @RequestMapping("/splitRecursive")
+    public String splitRecursive(String filePath) { 
+        List<Document> documents;
+        try {
+            documents = documentReaderFactory.read(new File(filePath));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        for (Document document : documents) {
+            System.out.println("before chunk:" + document.getText());
+            System.out.println("");
+            // 此处我们将分割的字符设置成换行符号，所以每一行就是一个chunk
+            RecursiveCharacterTextSplitter splitter = new RecursiveCharacterTextSplitter(300);
+//            RecursiveCharacterTextSplitter splitter = new RecursiveCharacterTextSplitter(300, new String[]{"\n\n", "\n"});
+
+            List<Document> chunkedDocuments = splitter.split(document);
+
+            for (Document chunkedDocument : chunkedDocuments) {
+                System.out.println("after chunk:" + chunkedDocument.getText());
+                System.out.println("");
+            }
+
+            System.out.println("==============");
+        }
+        
+        return "success";
+    }
+```
+
+使用postman进行接口测试。查看 **after chunk**  结果。
+
+![image-20260404173819763](images/LLMentor（2）RAG/image-20260404173819763.png)
+
+> 需要注意的是：如果你使用的是这个方式的话，文档是不能将空格、换行等符号删除的，否则的话就会出现意想不到的效果，因为是需要基于这些符号来进行分段的。
+
+#### 基于语义拆分
+
+```java
+    @RequestMapping("/splitSentence")
+    public String splitSentence(String filePath) {
+        SentenceSplitter splitter = new SentenceSplitter(100);
+        for (Document textSegment : splitter.split(new Document("""
+                   Harry Potter is a series of seven fantasy novels written by British author J. K. Rowling. The novels chronicle the lives of a young wizard, Harry Potter, and his friends, Ron Weasley and Hermione Granger, all of whom are students at Hogwarts School of Witchcraft and Wizardry. The main story arc concerns Harry's conflict with Lord Voldemort, a dark wizard who intends to become immortal, overthrow the wizard governing body known as the Ministry of Magic, and subjugate all wizards and non-magical people, known in-universe as Muggles.  \s
+                
+                   The series was originally published in English by Bloomsbury in the United Kingdom and Scholastic Press in the United States. A series of many genres, including fantasy, drama, coming-of-age fiction, and the British school story (which includes elements of mystery, thriller, adventure, horror, and romance), the world of Harry Potter explores numerous themes and includes many cultural meanings and references.[1] Major themes in the series include prejudice, corruption, madness, love, and death.[2] \s
+                
+                   Since the release of the first novel, Harry Potter and the Philosopher's Stone, on 26 June 1997, the books have found immense popularity and commercial success worldwide. They have attracted a wide adult audience as well as younger readers and are widely considered cornerstones of modern literature,[3][4] though the books have received mixed reviews from critics and literary scholars. As of February 2023, the books have sold more than 600 million copies worldwide, making them the best-selling book series in history, available in dozens of languages. The last four books all set records as the fastest-selling books in history, with the final instalment selling roughly 2.7 million copies in the United Kingdom and 8.3 million copies in the United States within twenty-four hours of its release. It holds the Guinness World Record for "Best-selling book series for children."[5] \s
+                """))) {
+            System.out.println(textSegment.getText());
+            System.out.println("===========================");
+        }
+        return "success";
+    }
+```
+
+上述是一段关于哈利波特的英文的介绍。
+
+我们使用`SentenceSplitter`进行拆分。
+
+使用postman进行接口测试：
+
+![image-20260404173958482](images/LLMentor（2）RAG/image-20260404173958482.png)
+
+发现分成了6段chunk。
 
 
 
