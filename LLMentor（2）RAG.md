@@ -620,7 +620,190 @@ public class EmbeddingService {
 
 ## 检索增强生成
 
+首先通过向量相似度检索，能够从数据库中筛选出与用户问题最接近的内容。实现增强生成的效果。
 
+### 相似度检索
+
+```java
+    @RequestMapping("/query")
+    public String query(String query) {
+        List<Document> documents = embeddingService.similaritySearch(query);
+
+        StringBuilder sb = new StringBuilder();
+        for (Document document : documents) {
+            System.out.println(document.getText());
+            sb.append(document.getText()).append("\n");
+            sb.append("======================");
+        }
+
+        return sb.toString();
+    }
+```
+
+```java
+@Service
+public class EmbeddingService {
+
+    @Autowired
+    private EmbeddingModel embeddingModel;
+
+    @Autowired
+    private VectorStore vectorStore;
+
+    /**
+     * 向量化
+     */
+    public List<float[]> embed(List<Document> documents) {
+        return documents.stream().map(document -> embeddingModel.embed(document.getText()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 向量化并存储向量库
+     */
+    public void embedAndStore(List<Document> documents) {
+        List<List<Document>> batches = new ArrayList<>();
+        for (int i = 0; i < documents.size(); i += 9) {
+            batches.add(documents.subList(i, Math.min(i + 9, documents.size())));
+        }
+
+        for (List<Document> batch : batches) {
+            vectorStore.add(batch);
+        }
+    }
+
+    private static final int TOP_K = 5;
+    private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.5;
+    public List<Document> similaritySearch(String query) {
+        return vectorStore.similaritySearch(SearchRequest.builder()
+                        .query(query)
+                        .topK(TOP_K)
+                        .similarityThreshold(DEFAULT_SIMILARITY_THRESHOLD)
+                .build());
+    }
+
+    public List<Document> similaritySearch(SearchRequest searchRequest) {
+        return vectorStore.similaritySearch(searchRequest);
+    }
+}
+```
+
+- query ： 用于检索的查询语句。这个Query会自动与向量库中的存储的向量进行比对
+- topK：返回结果条数，最相近的
+- similarityThreshold：相似度阈值（0 ~ 1）
+
+### 增强生成
+
+```java
+    @Autowired
+    private ChatModel chatModel;
+    @GetMapping("/retrieve")
+    public String retrieve(String query, Double threshold) {
+        List<Document> documents = embeddingService.similaritySearch(SearchRequest.builder()
+                .query(query)
+                .similarityThreshold(threshold)
+                .build());
+
+        String documentContent = documents.stream()
+                .map(Document::getText)
+                .collect(Collectors.joining("\n\n==========文档分割线=========\n\n"));
+
+
+        // 构建提示词模板
+        String promptTemplate = """
+                请基于以下提供的参考文档内容，回答用户的问题。
+                如果参考文档中不存在筛选的内容的话，直接提示用户“没有找到对应信息”，不要编造内容。
+                
+                参考文档：
+                {documents}
+                
+                用户问题：
+                {question}
+                """;
+
+        PromptTemplate template = new PromptTemplate(promptTemplate);
+        Prompt prompt = template.create(Map.of("documents", documentContent, "question", query));
+
+        return chatModel.call(prompt).getResult().getOutput().getText();
+    }
+```
+
+看看效果：
+
+![image-20260404221810707](images/LLMentor（2）RAG/image-20260404221810707.png)
+
+![image-20260404221835830](images/LLMentor（2）RAG/image-20260404221835830.png)
+
+上面两个分别是能检索到和检索不到的情况，我们的文档内容如下：
+
+![image-20260404221933105](images/LLMentor（2）RAG/image-20260404221933105.png)
+
+可以看到内容输出的还是比较精准的。
+
+### 上述的代码还是有点冗余了，我们可不可以换一种方法来实现呢？QuestionAnswerAdvisor
+
+导入依赖：
+
+```xml
+<dependency>
+  <groupId>org.springframework.ai</groupId>
+  <artifactId>spring-ai-advisors-vector-store</artifactId>
+  <version>1.1.0</version>
+</dependency>
+```
+
+```java
+    @GetMapping("/retrieveAdvisor")
+    public Flux<String> retrieveAdvisor(String query, HttpServletResponse response) {
+        response.setCharacterEncoding("UTF-8");
+        return chatClient.prompt(query).stream().content();
+    }
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+
+        String promptTemplate = """
+                请基于以下提供的参考文档内容，回答用户的问题。
+                如果参考文档中不存在筛选的内容的话，直接提示用户“没有找到对应信息”，不要编造内容。
+                
+                参考文档：
+                {question_answer_context}
+                
+                用户问题：
+                {query}
+                """;
+
+        PromptTemplate template = new PromptTemplate(promptTemplate);
+
+        QuestionAnswerAdvisor advisor = QuestionAnswerAdvisor.builder(vectorStore)
+                .searchRequest(SearchRequest.builder().similarityThreshold(0.5).topK(5).build())
+                .promptTemplate(template)
+                .build();
+
+        chatClient = ChatClient.builder(chatModel)
+                .defaultAdvisors(advisor)
+                .defaultOptions(
+                        DashScopeChatOptions.builder()
+                                .withTopP(0.5)
+                                .build()
+                )
+                .build();
+    }
+```
+
+> 实现bean 初始化的流程接口：`InitializingBean`。重写方法：**afterPropertiesSet**。在其中我们设置好`QuestionAnswerAdvisor`和相关的`promptTemplate`提示词。
+>
+> 需要注意：在提示词模板中的占位符必须是：`question_answer_context`和`query`。这是QuestionAnswerAdvisor中需要去进行匹配的。
+
+查看效果：
+
+![image-20260404222508799](images/LLMentor（2）RAG/image-20260404222508799.png)
+
+这个`QuestionAnswerAdvisor`中已经帮我们做好了相关的RAG流程。
+
+我们只需要在初始化的时候设置到advisor即可。
+
+大大简化了开发。
 
 
 
