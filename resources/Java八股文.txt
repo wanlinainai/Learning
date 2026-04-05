@@ -1,0 +1,18 @@
+== 和 equals 的区别？== 对于基本类型比较值，引用类型比较内存地址；equals() 默认比较地址，重写后（如 String、Integer）比较内容。
+String、StringBuilder、StringBuffer 区别？String 不可变，线程安全；StringBuilder 可变，非线程安全，效率最高；StringBuffer 可变，线程安全，效率低。
+重载和重写的区别？重载：同一个类，方法名相同、参数列表不同；重写：子类重写父类方法，方法签名一致，权限不能更小。
+接口和抽象类的区别？抽象类可以有构造方法、普通成员变量、普通方法；接口只能有常量和抽象方法（JDK8+ 支持默认方法），一个类可实现多个接口。
+final 关键字作用？修饰类：类不能被继承；修饰方法：方法不能被重写；修饰变量：变量为常量，只能赋值一次。
+
+ArrayList 和 LinkedList 区别？ArrayList 基于数组，查询快、增删慢；LinkedList 基于双向链表，查询慢、增删快。
+HashMap 底层原理？JDK7：数组 + 链表；JDK8+：数组 + 链表 / 红黑树（链表长度≥8 转红黑树），通过 hash 寻址，拉链法解决哈希冲突。
+HashMap 和 Hashtable 区别？HashMap 非线程安全，允许 key/value 为 null；Hashtable 线程安全（全表锁），不允许 null。
+ConcurrentHashMap 如何保证线程安全？JDK7：分段锁；JDK8+：CAS + synchronized 锁节点，粒度更细，效率更高。
+List、Set、Map 区别？List 有序可重复；Set 无序不可重复；Map 存储键值对，key 不可重复。
+
+线程和进程的区别？进程是资源分配最小单位，线程是 CPU 调度最小单位；一个进程可包含多个线程，共享进程资源。
+start () 和 run () 的区别？start () 启动线程，进入就绪状态；run () 只是普通方法调用，不会开启新线程。
+synchronized 和 Lock 区别？synchronized 是 JVM 关键字，自动释放锁，不可中断；Lock 是接口，手动加锁 / 释放锁，可中断、可超时。
+volatile 关键字作用？保证变量可见性，禁止指令重排序，但不保证原子性。
+线程池七大参数？corePoolSize、maximumPoolSize、keepAliveTime、unit、workQueue、threadFactory、handler。
+
