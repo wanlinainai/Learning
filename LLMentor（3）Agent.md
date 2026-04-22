@@ -175,6 +175,79 @@ if (finalResult.isPresent()) {
 
 参考代码：HumanInTheLoopTest
 
+## 多智能体（Multi Agent）
+
+多智能体是由多个Agent组成的系统，这一些智能体能够感知环境、做出决策、与其他智能体交互，并协同或竞争以完成特定任务。
+
+### 常见的协作模式
+
+#### 子智能体模式
+
+最主要的就是一个主智能体将其他子智能体视为工具，需要的时候调用。控制器管理编排，作为工具的子Agent执行特定的任务并返回结果。
+
+主智能体决定调用哪一个子Agent，提供什么输入，以及如何组合结果。子Agent是无状态的，他们和用户直接交互，所有的对话和记忆都由代理维护。提供了上下文隔离：每一个子代理在他们自己的上下文窗口工作，防止主对话的上下文膨胀。
+
+Langchain中的实现：
+
+```python
+from langchain.tools import tool
+from langchain.agents import create_agent
+
+# Create a subagent
+subagent = create_agent(model="anthropic:claude-sonnet-4-20250514", tools=[...])
+
+# Wrap it as a tool
+@tool("research", description="Research a topic and return findings")
+def call_research_agent(query: str):
+    result = subagent.invoke({"messages": [{"role": "user", "content": query}]})
+    return result["messages"][-1].content
+
+# Main agent with subagent as a tool
+main_agent = create_agent(model="anthropic:claude-sonnet-4-20250514", tools=[call_research_agent])
+```
+
+Spring AI Alibaba实现：
+
+```java
+// 创建子Agent
+ReactAgent writerAgent = ReactAgent.builder()
+.name("writer_agent")
+.model(chatModel)
+.description("可以写文章")
+.tolls(...)
+.instruction("你是一个知名的作家，擅长写作和创作。请根据用户的提问进行回答。")
+.build();
+
+// 创建主Agent，将子Agent作为工具
+ReactAgent blogAgent = ReactAgent.builder()
+.name("blog_agent")
+.model(chatModel)
+.instruction("根据用户给定的主题写一篇文章。使用写作工具来完成任务。")
+.tools(AgentTool.getFunctionToolCallback(writerAgent))
+.build();
+
+// 使用
+Optional<OverAllState> result = blogAgent.invoke("帮我写一个100字左右的散文");
+```
+
+#### HandOff
+
+接管/交接，
+
+核心思想是：**一个当前”智能体“在处理用户请求的时候，如果发现自己无法或不适合继续处理，他会主动将任务”交接“（hand off）给另一个更专业的智能体，并将控制权转移过去。**
+
+#### Chat Group
+
+群聊模式指的是：一组具有不同的专业角色的智能体（Agents）
+
+- 所有参与者订阅同一个”Topic“（主题），形成一个共享的消息通道。
+- 智能体按照顺序轮流发言，同一时间只有一个智能体在工作。
+- 整个流程由一个特殊的”**群聊管理器**“控制，负责决定下一个该谁发言。
+
+#### 自定义工作流
+
+## 使用AutoGen构建一个代码生成器
+
 
 
 
