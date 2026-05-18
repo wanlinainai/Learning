@@ -254,6 +254,28 @@ Optional<OverAllState> result = blogAgent.invoke("帮我写一个100字左右的
 
 
 
+## Agent生成PPT
+
+### 模板填充PPT需求分析
+
+主要的PPT生成的流程，拆解豆包生成PPT的流程来看。分成：
+
+- 需求澄清
+- 数据收集
+- 全局的视觉设计
+- 大纲生成
+- 页面内容
+- 素材的准备
+- PPT生成和渲染
+
+#### PPT生成智能体
+
+
+
+
+
+
+
 
 
 
