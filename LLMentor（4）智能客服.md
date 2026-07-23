@@ -372,3 +372,15 @@ upload的时候：
 
 
 
+### Langchain4J中RAG的执行流程
+
+RetrievalAugumentor是Langchain4J的RAG的核心组件，只有一个AiService配置了这个之后，才会做检索。
+
+RetrievalAugmentor中包含了以下的组件：
+
+- QueryTransformer：为了提升检索的质量，将用户的原始查询转换成一个或者多个新的查询。
+- QueryRouter：根据查询语义，路由到最合适的一个或多个检索器。
+- ContentRetriever：接受一个Query，从底层的数据源中检索出相关内容，返回按相关性排序的List<Content>，这是RAG流程中唯一一个需要由用户提供的组件。
+- ContentAggregator：将所有查询从所有的检索器中检索到的内容进行聚合、去重、排序，确保最终只返回最相关的并且不冗余的内容给LLM。
+- ContentInjector：将构造之后的检索内容注入到原始用户消息中，构造增强提示词，使LLM能基于检索到的内容生成回答。
+
